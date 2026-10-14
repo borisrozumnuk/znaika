@@ -1,0 +1,5 @@
+#include "../../Flutter/Flutter-Release.xcconfig"
+#include "Warnings.xcconfig"
+
+// Только Apple Silicon: LiteRT-LM подключён в сборке arm64 (как у Foresight).
+ARCHS = arm64

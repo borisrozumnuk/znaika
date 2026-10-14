@@ -1,0 +1,19 @@
+name: litert_lm
+description: "Тонкая Dart FFI-обёртка над C API LiteRT-LM (Google) для macOS: Gemma на GPU через Metal."
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.13.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  ffi: ^2.1.0
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      macos:
+        ffiPlugin: true

@@ -1,0 +1,8 @@
+module CLiteRTLM {
+   header "engine.h"
+   header "conversation.h"
+   header "embedding_engine.h"
+   header "capabilities.h"
+   header "experimental.h"
+   export *
+}
