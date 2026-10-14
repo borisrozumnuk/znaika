@@ -171,10 +171,60 @@ class NotesStopped implements Exception {
   String toString() => 'Заметки остановлены';
 }
 
+/// Модель занята одним запросом за раз. Ждущие — по порядку; срочные ([urgent], чат) —
+/// впереди обычных (частей заметок), но после уже начатого запроса. «Остановить», пока
+/// запрос ждёт, убирает его из очереди сразу ([NotesStopped]).
+class ModelLock {
+  bool _busy = false;
+  final _waiters = <({Completer<void> ready, bool urgent})>[];
+
+  bool get busy => _busy;
+
+  Future<T> run<T>(Future<T> Function() body, {bool urgent = false, NotesStop? stop}) async {
+    await _acquire(urgent: urgent, stop: stop);
+    try {
+      return await body();
+    } finally {
+      _release();
+    }
+  }
+
+  Future<void> _acquire({required bool urgent, NotesStop? stop}) async {
+    if (stop?.stopped ?? false) throw const NotesStopped();
+    if (!_busy) {
+      _busy = true;
+      return;
+    }
+    final waiter = (ready: Completer<void>(), urgent: urgent);
+    final at = urgent ? _waiters.indexWhere((w) => !w.urgent) : -1;
+    at < 0 ? _waiters.add(waiter) : _waiters.insert(at, waiter);
+    stop?._onStop = () {
+      if (_waiters.remove(waiter)) waiter.ready.completeError(const NotesStopped());
+    };
+    try {
+      await waiter.ready.future;
+    } finally {
+      stop?._onStop = null;
+    }
+  }
+
+  /// Модель свободна — передать её следующему ждущему (занятость не снимается).
+  void _release() {
+    if (_waiters.isEmpty) {
+      _busy = false;
+    } else {
+      _waiters.removeAt(0).ready.complete();
+    }
+  }
+}
+
 /// Держит модель загруженной между встречами: загрузка занимает секунды.
 /// Один на всё приложение (app_globals): вторая копия Gemma (3,7 ГБ) не поместится
-/// в память. Запросы выполняются по очереди — выжимка после записи подождёт,
-/// пока пересоздаются заметки другой встречи, и наоборот.
+/// в память. Очередь двухуровневая:
+/// - задачи заметок (заметки, заголовок) идут по одной ([_exclusive]) — выжимка после
+///   записи подождёт, пока пересоздаются заметки другой встречи, и наоборот;
+/// - сама модель занята одним запросом за раз ([_locked]); вопрос чата встаёт к ней
+///   первым и проходит между частями заметок — ждёт не всех заметок, а одного запроса.
 class Summarizer {
   Summarizer({
     required this.modelsDir,
@@ -213,6 +263,12 @@ class Summarizer {
   Future<void> _queue = Future.value();
   int _jobs = 0;
 
+  /// Модель занята одним запросом за раз; чат — впереди частей заметок.
+  final _model = ModelLock();
+
+  Future<T> _locked<T>(Future<T> Function() body, {bool urgent = false, NotesStop? stop}) =>
+      _model.run(body, urgent: urgent, stop: stop);
+
   Future<T> _exclusive<T>(Future<T> Function() job) {
     _jobs++;
     final result = _queue.then((_) {
@@ -223,8 +279,9 @@ class Summarizer {
     return result;
   }
 
-  Future<LlmEngine> _ensureEngine() async {
-    final model = '$modelsDir/${_jobModel ?? modelFile()}';
+  /// [file] — модель запроса (у чата своя, иначе — модель текущей задачи заметок).
+  Future<LlmEngine> _ensureEngine([String? file]) async {
+    final model = '$modelsDir/${file ?? _jobModel ?? modelFile()}';
     final existing = _engine;
     if (existing != null && _loadedModel == model) return existing;
     // Выбрали другую модель — прежнюю выгружаем: две в память не поместятся.
@@ -250,6 +307,8 @@ class Summarizer {
   /// таймауту, и модель на GPU после этого неработоспособна. Тогда она выгружается
   /// и запрос повторяется на процессоре: там медленнее, но ответ тот же.
   /// На GPU модель вернётся при следующих заметках.
+  /// Ждёт модель ([_locked]); [urgent] — без очереди за частями заметок (чат),
+  /// [onStart] — модель дошла до запроса, [file] — модель запроса.
   Future<String> _ask(
     String prompt, {
     String system = _system,
@@ -258,6 +317,33 @@ class Summarizer {
     void Function(String stage)? onProgress,
     void Function(String textSoFar)? onText,
     NotesStop? stop,
+    bool urgent = false,
+    void Function()? onStart,
+    String? file,
+  }) =>
+      _locked(urgent: urgent, stop: stop, () {
+        onStart?.call();
+        return _askNow(
+          prompt,
+          system: system,
+          maxOutputTokens: maxOutputTokens,
+          temperature: temperature,
+          onProgress: onProgress,
+          onText: onText,
+          stop: stop,
+          file: file,
+        );
+      });
+
+  Future<String> _askNow(
+    String prompt, {
+    required String system,
+    required int maxOutputTokens,
+    required double temperature,
+    void Function(String stage)? onProgress,
+    void Function(String textSoFar)? onText,
+    NotesStop? stop,
+    String? file,
   }) async {
     for (var attempt = 1;; attempt++) {
       if (stop?.stopped ?? false) throw const NotesStopped();
@@ -269,7 +355,7 @@ class Summarizer {
         _onCpu = false;
         _gpuRetryAt = null;
       }
-      final engine = await _ensureEngine();
+      final engine = await _ensureEngine(file);
       final buffer = StringBuffer();
       final watch = Stopwatch()..start();
       Duration? firstPiece;
@@ -351,7 +437,7 @@ class Summarizer {
       try {
         return await _summarize(lines, outFile: outFile, onProgress: onProgress, onText: onText, stop: stop);
       } finally {
-        _backToGpu();
+        await _locked(() async => _backToGpu());
       }
     });
   }
@@ -364,9 +450,8 @@ class Summarizer {
     NotesStop? stop,
   }) async {
     onProgress?.call('Загрузка модели…');
-    final engine = await _ensureEngine();
-
-    final chunks = _splitByTokens(engine, lines, _chunkTokens);
+    // Подсчёт токенов — тоже модель: между запросами её мог занять чат.
+    final chunks = await _locked(stop: stop, () async => _splitByTokens(await _ensureEngine(), lines, _chunkTokens));
     final String source;
     if (chunks.length == 1) {
       source = '<расшифровка>\n${chunks.single}\n</расшифровка>';
@@ -379,8 +464,10 @@ class Summarizer {
       }
       // Очень длинная встреча: заметки частей сами не помещаются в запрос — сжимаем их группами.
       var parts = notes;
-      while (parts.length > 1 && (await _ensureEngine()).countTokens(parts.join('\n\n')) > _chunkTokens) {
-        final groups = _splitByTokens(await _ensureEngine(), parts, _chunkTokens);
+      while (parts.length > 1 &&
+          await _locked(stop: stop, () async => (await _ensureEngine()).countTokens(parts.join('\n\n'))) >
+              _chunkTokens) {
+        final groups = await _locked(stop: stop, () async => _splitByTokens(await _ensureEngine(), parts, _chunkTokens));
         if (groups.length == parts.length) break;
         final merged = <String>[];
         for (var i = 0; i < groups.length; i++) {
@@ -413,33 +500,42 @@ class Summarizer {
     return summary;
   }
 
-  /// Модель занята (пишет заметки или заголовок) — новый запрос встанет в очередь.
-  bool get busy => _jobs > 0;
+  /// Модель сейчас отвечает на запрос — новый подождёт его (чат — только его).
+  bool get busy => _model.busy;
 
-  /// Ответ на вопрос в чате по встречам. [onStart] — очередь дошла до вопроса
-  /// (до этого модель дописывала заметки), [onText] — ответ по мере генерации.
+  /// Ответ на вопрос в чате по встречам — без очереди за заметками: между их частями.
+  /// [onStart] — модель дошла до вопроса, [onText] — ответ по мере генерации.
+  /// «Остановить», пока вопрос ждёт, убирает его из очереди сразу.
   Future<String> answer(
     String prompt, {
     required String system,
     void Function()? onStart,
     void Function(String textSoFar)? onText,
     NotesStop? stop,
-  }) =>
-      _exclusive(() async {
-        onStart?.call();
-        try {
-          return await _ask(prompt, system: system, maxOutputTokens: 1024, onText: onText, stop: stop);
-        } finally {
-          _backToGpu();
-        }
-      });
+  }) async {
+    try {
+      return await _ask(
+        prompt,
+        system: system,
+        maxOutputTokens: 1024,
+        onText: onText,
+        stop: stop,
+        urgent: true,
+        onStart: onStart,
+        file: modelFile(),
+      );
+    } finally {
+      // Заметки посреди работы (возможно, на процессоре после перегрева) — не вмешиваемся.
+      if (_jobs == 0) await _locked(() async => _backToGpu());
+    }
+  }
 
   /// Короткий заголовок встречи (3–7 слов) по готовой выжимке.
   Future<String> makeTitle(String summary) => _exclusive(() async {
         try {
           return await _makeTitle(summary);
         } finally {
-          _backToGpu();
+          await _locked(() async => _backToGpu());
         }
       });
 

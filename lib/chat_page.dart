@@ -87,7 +87,9 @@ class _ChatPageState extends State<ChatPage> {
       );
       setState(() {
         turn.sources = sources;
-        turn.status = summarizer.busy ? 'Жду, пока Gemma допишет заметки…' : 'Читаю ${_meetingsWord(sources.length)}…';
+        turn.status = summarizer.busy
+            ? 'Gemma пишет заметки — отвечу, как только допишет текущую часть…'
+            : 'Читаю ${_meetingsWord(sources.length)}…';
       });
       final prompt = chatPrompt(question, sources, history, DateTime.now());
       final answer = await summarizer.answer(

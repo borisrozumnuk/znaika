@@ -598,6 +598,9 @@ class _HomePageState extends State<HomePage> {
     // ZNAIKA_ASK=<вопрос>[|<уточнение>…] — спросить чат по встречам, вывести ответы и выйти.
     final ask = Platform.environment['ZNAIKA_ASK'];
     if (ask != null) {
+      // ZNAIKA_ASK_DELAY=N — спросить через N с (например, посреди ZNAIKA_RESUMMARIZE).
+      final delay = int.tryParse(Platform.environment['ZNAIKA_ASK_DELAY'] ?? '') ?? 0;
+      await Future<void>.delayed(Duration(seconds: delay));
       final history = <ChatTurn>[];
       for (final question in ask.split('|')) {
         final watch = Stopwatch()..start();
@@ -623,6 +626,7 @@ class _HomePageState extends State<HomePage> {
         );
         history.add(ChatTurn(question, answer, sources));
       }
+      await stdout.flush();
       exit(0);
     }
     // ZNAIKA_REGENERATE=<папка встречи> — открыть встречу и нажать «Пересоздать
