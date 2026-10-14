@@ -13,6 +13,13 @@ PRODUCT_BUNDLE_IDENTIFIER = local.experiments.znaika
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = © 2026 Boris Rozumniuk
 
+// Hardened runtime: macOS не даёт подсунуть приложению чужую библиотеку (DYLD_*-переменные,
+// библиотеки других команд) и воспользоваться его разрешениями на микрофон и системный звук.
+ENABLE_HARDENED_RUNTIME = YES
+// Xcode добавляет в сборки с сертификатом разработчика право на отладку (get-task-allow):
+// с ним любой процесс пользователя может подключиться к приложению отладчиком. В релизе не нужно.
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS[config=Release] = NO
+
 // Подпись. По умолчанию — «Sign to Run Locally» (без команды разработчика): проект
 // собирается у любого. Своя команда — в Signing.local.xcconfig рядом (он не в git), например:
 //   CODE_SIGN_STYLE = Manual

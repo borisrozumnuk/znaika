@@ -132,6 +132,11 @@ class MeetingStore {
   /// Удаляет встречу: папку — через [moveToTrash] (в приложении — в Корзину macOS,
   /// чтобы её можно было вернуть), запись — из базы и поискового индекса.
   Future<void> delete(Meeting meeting, {required Future<void> Function(Directory dir) moveToTrash}) async {
+    // В Корзину — только папка встречи прямо внутри recordings, никакой другой путь.
+    final parent = meeting.dir.absolute.parent.path;
+    if (parent != recordingsDir.absolute.path || _folderOf(meeting.dir).startsWith('.')) {
+      throw StateError('Не папка встречи: ${meeting.dir.path}');
+    }
     await moveToTrash(meeting.dir);
     final folder = _folderOf(meeting.dir);
     await (db.delete(db.meetings)..where((m) => m.folder.equals(folder))).go();

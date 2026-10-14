@@ -71,7 +71,17 @@ if (( RELEASE )); then
   # сеть) и идентификатор сохраняются.
   find "$DIR/Znaika.app/Contents/Frameworks" -depth \( -name "*.dylib" -o -name "*.framework" \) \
     -exec codesign --force --sign - --preserve-metadata=identifier,entitlements,flags {} \;
-  codesign --force --sign - --preserve-metadata=identifier,entitlements,flags "$DIR/Znaika.app"
+  # Hardened runtime остаётся (переменные DYLD_* не подсунут чужую библиотеку), но у ad-hoc
+  # подписи нет команды, и проверка библиотек отвергла бы собственные dylib приложения
+  # («different Team IDs») — для публичной сборки она отключается правом
+  # disable-library-validation. У сборок с командой автора проверка библиотек полная.
+  ENT="$STAGE/entitlements.plist"
+  codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null
+  /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENT"
+  # Право на отладку в публичной сборке не нужно (обычно его и так нет — см. AppInfo.xcconfig).
+  /usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" "$ENT" 2>/dev/null || true
+  codesign --force --sign - --options runtime --entitlements "$ENT" --preserve-metadata=identifier \
+    "$DIR/Znaika.app"
   codesign --verify --deep --strict "$DIR/Znaika.app"
   if codesign -dv --verbose=2 "$DIR/Znaika.app" 2>&1 | grep -q '^Authority='; then
     echo "⚠️  В подписи остался сертификат" >&2

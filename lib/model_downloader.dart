@@ -191,7 +191,13 @@ class ModelDownloader {
         final location = response.headers.value(HttpHeaders.locationHeader);
         await response.drain<void>();
         if (location == null) throw const HttpException('редирект без адреса');
-        uri = uri.resolve(location);
+        final next = uri.resolve(location);
+        // С HTTPS — только на HTTPS: подмену файла и так поймает SHA-256, но адреса моделей
+        // и трафик не должны уходить открытым текстом. (Все адреса в манифесте — HTTPS.)
+        if (uri.scheme == 'https' && next.scheme != 'https') {
+          throw HttpException('редирект с HTTPS на ${next.scheme}: $next');
+        }
+        uri = next;
         continue;
       }
       return response;

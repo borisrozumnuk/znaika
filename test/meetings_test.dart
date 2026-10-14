@@ -170,4 +170,26 @@ void main() {
     final long = Meeting(dir: Directory('/tmp/y'), title: 'а' * 200, startedAt: DateTime(2026, 1, 2));
     expect(exportFileName(long).length, lessThanOrEqualTo('2026-01-02 .md'.length + 80));
   });
+
+  test('в Корзину — только папка встречи внутри recordings', () async {
+    final root = await Directory.systemTemp.createTemp('meetings_trash_guard');
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(() async {
+      await db.close();
+      await root.delete(recursive: true);
+    });
+    final store = MeetingStore(Directory('${root.path}/recordings'), db);
+    final trashed = <String>[];
+    Future<void> trash(Directory dir) async => trashed.add(dir.path);
+    for (final dir in [root, Directory('${root.path}/recordings/../outside'), Directory('${root.path}/recordings/.hidden')]) {
+      await expectLater(
+        store.delete(Meeting(dir: dir, title: 'x', startedAt: DateTime(2026)), moveToTrash: trash),
+        throwsStateError,
+      );
+    }
+    expect(trashed, isEmpty);
+    final ok = Directory('${root.path}/recordings/2026-10-14T10-00-00');
+    await store.delete(Meeting(dir: ok, title: 'x', startedAt: DateTime(2026)), moveToTrash: trash);
+    expect(trashed, [ok.path]);
+  });
 }

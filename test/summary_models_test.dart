@@ -54,4 +54,16 @@ void main() {
     expect(allPackages, containsAll([for (final m in summaryModels) m.package]));
     expect(modelManager.stateOf(gemmaE2b.package).status, PackageStatus.missing);
   });
+
+  test('все модели качаются по HTTPS с закреплённой версии и с SHA-256', () {
+    for (final p in allPackages) {
+      for (final f in p.files) {
+        expect(Uri.parse(f.url).scheme, 'https', reason: f.url);
+        expect(f.sha256, matches(RegExp(r'^[0-9a-f]{64}$')), reason: f.path);
+        if (f.url.contains('huggingface.co')) {
+          expect(f.url, matches(RegExp(r'/resolve/[0-9a-f]{40}/')), reason: 'версия не закреплена: ${f.url}');
+        }
+      }
+    }
+  });
 }
