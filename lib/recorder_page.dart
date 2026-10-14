@@ -77,6 +77,11 @@ class _RecorderPageState extends State<RecorderPage> {
   /// Автоостановка: когда в последний раз звучала речь (реплика или черновик фразы)
   /// и когда остановим запись, если речь так и не появится.
   DateTime _lastSpeechAt = DateTime.now();
+
+  /// Подсказка «не слышно собеседников»: в канале собеседников был хоть какой-то звук
+  /// и микрофон уже слышал вашу речь (см. [othersSilentHint]).
+  bool _systemHeard = false;
+  bool _micSpoke = false;
   DateTime? _autoStopAt;
 
   /// Расшифровка на лету работает — без неё тишину не отличить, автоостановки нет.
@@ -318,13 +323,19 @@ class _RecorderPageState extends State<RecorderPage> {
         streamAudio: true,
       );
       _recordingDir = outDir;
-      _levelsSub = MeetCapture.levels.listen((levels) => setState(() => _levels = levels));
+      _levelsSub = MeetCapture.levels.listen((levels) => setState(() {
+            _levels = levels;
+            // −120 дБ — идеальная тишина (нули): так выглядит и канал без разрешения.
+            if ((levels.system ?? -120) > -120) _systemHeard = true;
+          }));
       _startedAt = DateTime.now();
       _paused = false;
       _pausedAt = null;
       _pausedTotal = Duration.zero;
       _lastSpeechAt = DateTime.now();
       _autoStopAt = null;
+      _systemHeard = false;
+      _micSpoke = false;
       _clock = Timer.periodic(const Duration(seconds: 1), (_) {
         setState(() {});
         _checkSilence();
@@ -371,6 +382,7 @@ class _RecorderPageState extends State<RecorderPage> {
   }
 
   void _addLiveUtterance(Utterance u) {
+    if (u.speaker == meLabel) _micSpoke = true;
     _heardSpeech();
     // Каналы распознаются независимо: вставляем реплику на её место по времени.
     var i = _liveUtterances.length;
@@ -538,13 +550,19 @@ class _RecorderPageState extends State<RecorderPage> {
     }
   }
 
-  /// Время записи без пауз.
-  String get _elapsed {
+  /// Сколько идёт запись без пауз.
+  Duration get _recordedFor {
     final start = _startedAt;
-    if (start == null || !_recording) return '00:00';
+    if (start == null || !_recording) return Duration.zero;
     final now = DateTime.now();
     final paused = _pausedTotal + (_pausedAt == null ? Duration.zero : now.difference(_pausedAt!));
-    final s = (now.difference(start) - paused).inSeconds;
+    return now.difference(start) - paused;
+  }
+
+  /// Время записи без пауз.
+  String get _elapsed {
+    if (!_recording) return '00:00';
+    final s = _recordedFor.inSeconds;
     final mm = (s ~/ 60 % 60).toString().padLeft(2, '0');
     final ss = (s % 60).toString().padLeft(2, '0');
     return s >= 3600 ? '${s ~/ 3600}:$mm:$ss' : '$mm:$ss';
@@ -568,7 +586,12 @@ class _RecorderPageState extends State<RecorderPage> {
   List<Widget> _content(BuildContext context) {
     final typography = MacosTheme.of(context).typography;
     final micDevice = _started?.micDevice;
-    final systemSilent = _files.any((f) => f.channel == 'system' && f.peak == 0);
+    final othersSilent = othersSilentHint(
+      recording: _recording && !_paused,
+      recordedFor: _recordedFor,
+      micSpoke: _micSpoke,
+      systemHeard: _systemHeard,
+    );
     final (title, subtitle) = switch ((_recording, _busy, _processing)) {
       (true, _, _) when _paused => ('Пауза', 'Звук не записывается'),
       (true, _, _) => ('Идёт запись', micDevice != null ? 'Микрофон: $micDevice' : 'Системный звук и микрофон'),
@@ -624,12 +647,18 @@ class _RecorderPageState extends State<RecorderPage> {
           ],
         ),
       ),
-      if (systemSilent) ...[
+      if (othersSilent) ...[
         const SizedBox(height: Gap.small),
-        const Callout(
+        Callout(
           kind: CalloutKind.warning,
-          text: 'Звук собеседников не записался: либо ничего не играло, либо у приложения нет разрешения '
-              'на запись системного звука (Системные настройки → Конфиденциальность и безопасность).',
+          text: 'Не слышно собеседников. Если вы на созвоне — проверьте, что у Znaika есть '
+              'разрешение на запись системного звука.',
+          action: PushButton(
+            controlSize: ControlSize.regular,
+            secondary: true,
+            onPressed: openSystemAudioSettings,
+            child: const Text('Открыть настройки'),
+          ),
         ),
       ],
       if (_error != null) ...[
@@ -692,4 +721,23 @@ String _minutes(Duration d) {
       ? 'минута'
       : (m % 10 >= 2 && m % 10 <= 4 && (m % 100 < 12 || m % 100 > 14) ? 'минуты' : 'минут');
   return '$m $word';
+}
+
+/// Подсказка «не слышно собеседников» — во время записи, когда похоже на отсутствие
+/// разрешения на системный звук: macOS тогда не сообщает об ошибке, а отдаёт тишину
+/// из нулей. Отличить её от «на Mac ничего не играет» нельзя, поэтому подсказываем, только
+/// если запись идёт уже минуту, вы говорили (микрофон слышал речь), а от собеседников —
+/// ни единого звука. Появился хоть какой-то звук — подсказки нет до конца записи.
+bool othersSilentHint({
+  required bool recording,
+  required Duration recordedFor,
+  required bool micSpoke,
+  required bool systemHeard,
+}) =>
+    recording && micSpoke && !systemHeard && recordedFor >= const Duration(minutes: 1);
+
+/// «Системные настройки → Конфиденциальность и безопасность → Запись экрана и системного
+/// звука» (там же раздел «Только системный звук»).
+Future<void> openSystemAudioSettings() async {
+  await Process.run('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture']);
 }
