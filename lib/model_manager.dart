@@ -65,6 +65,10 @@ class ModelManager extends ChangeNotifier {
   bool get transcriptionReady => isReady(vadPackage) && isReady(asrPackage);
   bool get allReady => requiredPackages.every(isReady);
 
+  /// Загрузка начата, но не закончена (приложение закрыли посреди неё) — продолжать сразу,
+  /// не дожидаясь кнопки: модели пользователь уже выбрал. Ничего не скачано — ждём «Скачать».
+  bool get shouldResume => !allReady && totalReceived > 0;
+
   int get totalSize => requiredPackages.fold(0, (sum, p) => sum + p.size);
   int get totalReceived => requiredPackages.fold(0, (sum, p) => sum + stateOf(p).received);
   int get _allReceived => allPackages.fold(0, (sum, p) => sum + stateOf(p).received);

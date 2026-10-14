@@ -66,4 +66,17 @@ void main() {
       }
     }
   });
+
+  test('после перезапуска посреди загрузки — продолжать сразу; ничего не скачано — ждать', () async {
+    final dir = await Directory.systemTemp.createTemp('resume');
+    addTearDown(() => dir.delete(recursive: true));
+    final fresh = ModelManager(dir);
+    await fresh.check();
+    expect(fresh.shouldResume, isFalse);
+
+    await File('${dir.path}/silero_vad.onnx.part').writeAsBytes(List.filled(1024, 0));
+    final resumed = ModelManager(dir);
+    await resumed.check();
+    expect(resumed.shouldResume, isTrue);
+  });
 }

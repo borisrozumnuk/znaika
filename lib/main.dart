@@ -171,6 +171,10 @@ class _RootState extends State<_Root> {
           if (modelManager.transcriptionReady && !showSetupScreen) {
             _proceeded = true;
             if (!modelManager.allReady) modelManager.start();
+          } else if (modelManager.shouldResume) {
+            // Экран загрузки после перезапуска посреди загрузки: продолжаем сами,
+            // «Продолжить загрузку» остаётся только после явной «Паузы».
+            modelManager.start();
           }
         });
       });
