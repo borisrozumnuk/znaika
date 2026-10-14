@@ -41,6 +41,10 @@ class _FakeModels extends ModelManager {
   /// id пакета → доля скачанного; остальные — готовы.
   final Map<String, double> progress;
 
+  /// Загрузка идёт, если что-то не докачано (на экране — «Пауза», а не «Продолжить загрузку»).
+  @override
+  bool get downloading => progress.values.any((part) => part < 1);
+
   @override
   PackageState stateOf(ModelPackage p) => switch (progress[p.id]) {
         final part? when part < 1 => PackageState(
