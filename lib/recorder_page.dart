@@ -41,6 +41,13 @@ class RecordedMeeting {
   final bool summarize;
 }
 
+/// Демо-состояние экрана записи для скриншотов README (test/readme_screenshots_test.dart):
+/// идёт запись столько-то, уже распознанные реплики и черновик звучащей фразы.
+/// В приложении не используется.
+@visibleForTesting
+({Duration elapsed, String micDevice, List<Utterance> lines, PartialUtterance? partial, CaptureLevels levels})?
+    debugRecorderDemo;
+
 class RecorderPage extends StatefulWidget {
   const RecorderPage({
     super.key,
@@ -116,6 +123,17 @@ class _RecorderPageState extends State<RecorderPage> {
   void initState() {
     super.initState();
     widget.controller?._toggle = _toggle;
+    if (debugRecorderDemo case final demo?) {
+      _recording = true;
+      _startedAt = DateTime.now().subtract(demo.elapsed);
+      _started = CaptureStarted(micDevice: demo.micDevice);
+      _liveUtterances.addAll(demo.lines);
+      if (demo.partial case final p?) _partials[p.channel] = p;
+      _levels = demo.levels;
+      _systemHeard = true;
+      // Строка «Идёт запись» в боковой панели.
+      WidgetsBinding.instance.addPostFrameCallback((_) => widget.recording.value = true);
+    }
     // Самопроверка без UI: ZNAIKA_SELFTEST=N — записать N секунд, вывести итог и выйти.
     final selftest = int.tryParse(Platform.environment['ZNAIKA_SELFTEST'] ?? '');
     if (selftest != null) WidgetsBinding.instance.addPostFrameCallback((_) => _selftest(selftest));

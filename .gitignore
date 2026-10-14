@@ -46,3 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Своя подпись (команда разработчика) — у каждого своя, см. macos/Runner/Configs/AppInfo.xcconfig.
+macos/Runner/Configs/Signing.local.xcconfig

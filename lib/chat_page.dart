@@ -10,6 +10,11 @@ import 'meetings.dart';
 import 'summarizer.dart';
 import 'ui.dart';
 
+/// Демо-переписка для скриншотов README (test/readme_screenshots_test.dart): вопросы,
+/// готовые ответы и встречи-источники. В приложении не используется.
+@visibleForTesting
+List<({String question, String answer, List<Meeting> sources})>? debugChatDemo;
+
 /// Вопрос в чате и ответ на него, пока он пишется.
 class _Turn {
   _Turn(this.question);
@@ -44,6 +49,18 @@ class _ChatPageState extends State<ChatPage> {
   NotesStop? _stop;
 
   bool get _answering => _stop != null;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final demo in debugChatDemo ?? const <({String question, String answer, List<Meeting> sources})>[]) {
+      _turns.add(_Turn(demo.question)
+        ..answer = demo.answer
+        ..sources = [for (final m in demo.sources) ChatSource(m)]
+        ..status = null
+        ..done = true);
+    }
+  }
 
   static const _suggestions = [
     'Что решили на последней встрече?',

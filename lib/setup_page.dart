@@ -150,7 +150,8 @@ class _SetupBody extends StatelessWidget {
         shaderCallback: (bounds) => const LinearGradient(
           colors: [Color(0xFF40D9F2), Color(0xFFB366F2)],
         ).createShader(bounds),
-        child: const MacosIcon(CupertinoIcons.waveform, size: 44),
+        // Цвет иконки непрозрачный: srcIn берёт её прозрачность, а по умолчанию она полупрозрачная.
+        child: const MacosIcon(CupertinoIcons.waveform, size: 44, color: Color(0xFFFFFFFF)),
       ),
       const SizedBox(height: Gap.small),
       Text(

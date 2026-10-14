@@ -4,8 +4,10 @@
 #   scripts/build_zip.sh          # собрать и упаковать
 #   scripts/build_zip.sh --test   # сначала анализатор и тесты
 #
-# Подпись — бесплатный Apple ID (Apple Development, команда 8BRUK588TS), без нотаризации:
-# на другом Mac первый запуск надо разрешить вручную (см. подсказку в конце).
+# Подпись — Apple Development из macos/Runner/Configs/Signing.local.xcconfig (у автора —
+# бесплатный Apple ID), без нотаризации: на другом Mac первый запуск надо разрешить вручную.
+# Без своей команды (ad-hoc) скрипт останавливается: такая сборка на другом Mac теряет
+# разрешения после каждого обновления.
 set -euo pipefail
 
 cd "${0:A:h}/.."
@@ -25,7 +27,8 @@ codesign --verify --deep --strict "$APP"
 SIGNED_BY=$(codesign -dv --verbose=2 "$APP" 2>&1 | sed -n 's/^Authority=\(Apple Development.*\)/\1/p' | head -1)
 if [[ -z "$SIGNED_BY" ]]; then
   echo "⚠️  Сборка не подписана сертификатом Apple Development (ad-hoc?)." >&2
-  echo "   Проверьте: security find-identity -v -p codesigning" >&2
+  echo "   Своя команда — в macos/Runner/Configs/Signing.local.xcconfig (см. README, «Установка»);" >&2
+  echo "   сертификаты на этом Mac: security find-identity -v -p codesigning" >&2
   exit 1
 fi
 echo "   $SIGNED_BY"

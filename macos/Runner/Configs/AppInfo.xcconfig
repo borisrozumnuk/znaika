@@ -12,3 +12,12 @@ PRODUCT_BUNDLE_IDENTIFIER = local.experiments.znaika
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = © 2026 Boris Rozumniuk
+
+// Подпись. По умолчанию — «Sign to Run Locally» (без команды разработчика): проект
+// собирается у любого. Своя команда — в Signing.local.xcconfig рядом (он не в git), например:
+//   CODE_SIGN_STYLE = Manual
+//   CODE_SIGN_IDENTITY = Apple Development
+//   DEVELOPMENT_TEAM = XXXXXXXXXX
+// С ней разрешения macOS (микрофон, системный звук) не слетают после каждой пересборки.
+CODE_SIGN_STYLE = Automatic
+#include? "Signing.local.xcconfig"
