@@ -107,6 +107,10 @@ Znaika», `lib/setup_page.dart`). Список с адресами и SHA-256 �
 Старый кэш ранних сборок (`Application Support/.../cache`) удаляется при запуске.
 
 ## Сборка и запуск
+
+Коротко — через `make`: `make` (релизная сборка), `make run` (собрать и открыть),
+`make test` (анализатор и тесты), `make zip` (zip на рабочий стол), `make setup-screen`
+(экран первого запуска), `make clean`. Подробно — ниже.
 ```bash
 flutter build macos --release      # или flutter run -d macos
 open build/macos/Build/Products/Release/Znaika.app
