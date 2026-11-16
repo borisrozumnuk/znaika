@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:macos_ui/macos_ui.dart';
 import 'package:znaika/app_globals.dart';
+import 'package:znaika/audio_player.dart';
 import 'package:znaika/chat_page.dart';
 import 'package:znaika/database.dart';
 import 'package:znaika/home_page.dart';
@@ -140,6 +141,95 @@ void main() {
     await settle(tester);
   }
 
+
+  macTest('звук встречи: плеер, «Слушать», щелчок по времени реплики — перемотка', (tester) async {
+    final calls = <MethodCall>[];
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(const MethodChannel('znaika/player'), (call) async {
+      calls.add(call);
+      return switch (call.method) {
+        'open' => 125.0,
+        'play' => true,
+        'state' => {'position': 11.0, 'duration': 125.0, 'playing': true},
+        'waveform' => [for (var i = 0; i < 240; i++) (i % 7) / 6],
+        _ => null,
+      };
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(const MethodChannel('znaika/player'), null));
+    final audio = File('${meeting.dir.path}/audio.m4a');
+    await tester.runAsync(() => audio.writeAsBytes(List.filled(2048, 0)));
+    addTearDown(() => tester.runAsync(() => audio.delete()));
+
+    var saved = 0;
+    final actions = MeetingActions(
+      rename: (_) async {},
+      renameSpeaker: (_, _) async {},
+      export: () {},
+      copyNotes: () {},
+      delete: () {},
+      saveAudio: () => saved++,
+    );
+    await pump(tester, MacosWindow(child: MeetingView(meeting: meeting, actions: actions)),
+        mode: ThemeMode.light, size: const Size(1280, 800));
+    await settle(tester, until: find.text('02:05'));
+    // Экспорта в Markdown в тулбаре нет (есть «Скопировать заметки» и пункт меню).
+    expect(find.byWidgetPredicate((w) => w is MacosIcon && w.icon == CupertinoIcons.square_arrow_up), findsNothing);
+    expect(find.byWidgetPredicate((w) => w is MacosIcon && w.icon == CupertinoIcons.doc_on_clipboard), findsOneWidget);
+    // «Сохранить запись…» — справа от дорожки.
+    final saveButton = find.byWidgetPredicate((w) => w is MacosIconButton && w.semanticLabel == 'Сохранить запись');
+    expect(tester.getCenter(saveButton).dx, greaterThan(tester.getRect(find.byType(WaveformSeekBar)).right));
+    await tester.tap(saveButton);
+    await tester.pump();
+    expect(saved, 1);
+    expect(find.text('02:05'), findsOneWidget); // длительность
+    expect(calls.first.method, 'open');
+    expect((calls.first.arguments as Map)['path'], audio.path);
+
+    await tester.tap(find.byWidgetPredicate((w) => w is MacosIconButton && w.semanticLabel == 'Слушать запись'));
+    await tester.pump();
+    expect(calls.map((c) => c.method), contains('play'));
+
+    // Время реплики «[00:11]» — перемотка на 11 с.
+    await tester.tap(find.textContaining('Расшифровка · 2 реплик'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('00:11').last);
+    await tester.pump();
+    final seek = calls.lastWhere((c) => c.method == 'seek');
+    expect((seek.arguments as Map)['seconds'], 11.0);
+
+    // Волна посчитана и сохранена рядом со звуком; щелчок по середине — перемотка к середине.
+    expect(calls.map((c) => c.method), contains('waveform'));
+    final wave = find.byType(WaveformSeekBar);
+    await tester.tapAt(tester.getCenter(wave));
+    await tester.pump();
+    final middle = (calls.lastWhere((c) => c.method == 'seek').arguments as Map)['seconds'] as double;
+    expect(middle, closeTo(62.5, 2));
+
+    // Скорость — текст постоянной ширины; по щелчку всплывает вертикальный ползунок, Esc закрывает.
+    Size rateLabel(String text) =>
+        tester.getSize(find.ancestor(of: find.text(text), matching: find.byType(SizedBox)).first);
+    final width1x = rateLabel('1×');
+    await tester.tap(find.text('1×'));
+    await tester.pump();
+    final slider = find.byType(MacosSlider);
+    expect(slider, findsOneWidget);
+    // Вертикальный: ползунок macOS в повёрнутом на 90° контейнере.
+    final rotated = find.ancestor(of: slider, matching: find.byType(RotatedBox));
+    expect(tester.getSize(rotated).height, greaterThan(tester.getSize(rotated).width));
+    // Верх ползунка — 2×.
+    final track = tester.getRect(rotated);
+    await tester.tapAt(Offset(track.center.dx, track.top + 2));
+    await tester.pump();
+    expect((calls.lastWhere((c) => c.method == 'rate').arguments as Map)['rate'], 2.0);
+    expect(find.text('2×'), findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byType(MacosSlider), findsNothing);
+    expect(rateLabel('2×'), width1x);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
+  });
 
   macTest('переименование на месте: Enter сохраняет, Esc отменяет, пустое не принимается', (tester) async {
     final renamed = <String>[];

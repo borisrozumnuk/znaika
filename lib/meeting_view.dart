@@ -3,6 +3,7 @@ import 'package:flutter/material.dart' show SelectionArea;
 import 'package:flutter/services.dart';
 import 'package:macos_ui/macos_ui.dart';
 
+import 'audio_player.dart';
 import 'meetings.dart';
 import 'speaker_hints.dart';
 import 'ui.dart';
@@ -17,6 +18,7 @@ class MeetingActions {
     required this.export,
     required this.copyNotes,
     required this.delete,
+    this.saveAudio,
   });
 
   final Future<void> Function(String title) rename;
@@ -32,6 +34,9 @@ class MeetingActions {
   final VoidCallback export;
   final VoidCallback copyNotes;
   final VoidCallback delete;
+
+  /// Сохранить звук встречи (audio.m4a) через панель «Сохранить»; null — кнопки нет.
+  final VoidCallback? saveAudio;
 }
 
 /// Заметки встречи пересоздаются: этап («Пишу выжимку…») и написанное на сейчас.
@@ -81,6 +86,28 @@ class _MeetingViewState extends State<MeetingView> {
   /// передаёт новый объект встречи (после правок), а не на каждый кадр генерации.
   late Future<List<Object?>> _data = _load();
 
+  /// Плеер звука встречи (audio.m4a), если он есть; переоткрывается при выборе другой встречи.
+  MeetingAudio? _audio;
+  String? _audioPath;
+
+  Future<void> _syncAudio() async {
+    final file = widget.meeting.audioFile;
+    if (_audioPath == file.path && _audio != null) return;
+    if (_audioPath != file.path) {
+      _audio?.dispose();
+      _audio = null;
+      _audioPath = null;
+    }
+    final exists = await file.exists();
+    // Пока проверяли, могли выбрать другую встречу.
+    if (!mounted || widget.meeting.audioFile.path != file.path || !exists || _audio != null) return;
+    final audio = MeetingAudio();
+    _audio = audio;
+    _audioPath = file.path;
+    await audio.open(file.path);
+    if (mounted) setState(() {});
+  }
+
   Future<List<Object?>> _load() => Future.wait([
         widget.meeting.readSummary(),
         widget.meeting.readTranscript(),
@@ -90,6 +117,7 @@ class _MeetingViewState extends State<MeetingView> {
   @override
   void initState() {
     super.initState();
+    _syncAudio();
     widget.renameRequests?.addListener(_startRename);
     // Как в Finder: щелчок мимо поля сохраняет новое имя.
     _titleFocus.addListener(() {
@@ -100,7 +128,11 @@ class _MeetingViewState extends State<MeetingView> {
   @override
   void didUpdateWidget(MeetingView old) {
     super.didUpdateWidget(old);
-    if (!identical(old.meeting, widget.meeting)) _data = _load();
+    if (!identical(old.meeting, widget.meeting)) {
+      _data = _load();
+      // Та же встреча после обработки могла получить звук; другая — свой.
+      _syncAudio();
+    }
     if (old.renameRequests != widget.renameRequests) {
       old.renameRequests?.removeListener(_startRename);
       widget.renameRequests?.addListener(_startRename);
@@ -113,6 +145,7 @@ class _MeetingViewState extends State<MeetingView> {
 
   @override
   void dispose() {
+    _audio?.dispose();
     widget.renameRequests?.removeListener(_startRename);
     _titleController.dispose();
     _titleFocus.dispose();
@@ -174,13 +207,6 @@ class _MeetingViewState extends State<MeetingView> {
     return MacosScaffold(
       toolBar: ToolBar(
         actions: [
-          ToolBarIconButton(
-            label: 'Экспортировать',
-            icon: const MacosIcon(CupertinoIcons.square_arrow_up),
-            showLabel: false,
-            tooltipMessage: 'Экспортировать в Markdown',
-            onPressed: actions.export,
-          ),
           ToolBarIconButton(
             label: 'Пересоздать заметки',
             icon: const MacosIcon(CupertinoIcons.arrow_clockwise),
@@ -277,6 +303,10 @@ class _MeetingViewState extends State<MeetingView> {
                       onAcceptHint: (h) => widget.actions.renameSpeaker(h.speaker, h.name),
                     ),
                   ],
+                  if (_audio case final audio? when audio.ready) ...[
+                    const SizedBox(height: Gap.small),
+                    AudioPlayerBar(audio: audio, onSave: actions.saveAudio),
+                  ],
                   const SizedBox(height: Gap.group),
                   // Пока данные перечитываются, остаются прежние — без мигания «Загрузка…».
                   if (snapshot.data == null)
@@ -326,7 +356,14 @@ class _MeetingViewState extends State<MeetingView> {
                     const SizedBox(height: Gap.group),
                     Disclosure(
                       title: 'Расшифровка · ${transcript.length} реплик',
-                      child: TranscriptLines(transcript),
+                      child: TranscriptLines(
+                        transcript,
+                        // Время реплики — ссылка на этот момент записи.
+                        onSeek: switch (_audio) {
+                          final audio? when audio.ready => (at) => audio.seek(at, andPlay: true),
+                          _ => null,
+                        },
+                      ),
                     ),
                   ],
                 ],
@@ -551,10 +588,13 @@ class _PencilButtonState extends State<_PencilButton> {
 /// Реплики «[мм:сс] Кто: текст»: время — серым моноширинными цифрами, говорящий — полужирным.
 /// [pending] — черновики звучащих фраз: серым курсивом с многоточием, после остальных.
 class TranscriptLines extends StatelessWidget {
-  const TranscriptLines(this.lines, {super.key, this.pending = const []});
+  const TranscriptLines(this.lines, {super.key, this.pending = const [], this.onSeek});
 
   final List<String> lines;
   final List<String> pending;
+
+  /// Щелчок по времени реплики — слушать запись с этого места (если звук есть).
+  final void Function(Duration at)? onSeek;
 
   static final _line = RegExp(r'^\[([\d:]+)\]\s+([^:]+):\s+(.*)$');
 
@@ -591,7 +631,14 @@ class TranscriptLines extends StatelessWidget {
                   children: [
                     SizedBox(
                       width: timeWidth,
-                      child: Text(m[1]!, style: timeStyle, softWrap: false),
+                      child: switch ((onSeek, parseTimestamp(m[1]!))) {
+                        (final seek?, final at?) when index < lines.length => _TimeLink(
+                          text: m[1]!,
+                          style: timeStyle,
+                          onTap: () => seek(at),
+                        ),
+                        _ => Text(m[1]!, style: timeStyle, softWrap: false),
+                      },
                     ),
                     Expanded(
                       child: Text.rich(
@@ -738,5 +785,39 @@ class SummaryMarkdown extends StatelessWidget {
     }
     if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
     return TextSpan(style: style, children: spans);
+  }
+}
+
+/// Время реплики, по щелчку — слушать запись с этого места; при наведении — цвет акцента.
+class _TimeLink extends StatefulWidget {
+  const _TimeLink({required this.text, required this.style, required this.onTap});
+
+  final String text;
+  final TextStyle style;
+  final VoidCallback onTap;
+
+  @override
+  State<_TimeLink> createState() => _TimeLinkState();
+}
+
+class _TimeLinkState extends State<_TimeLink> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Text(
+          widget.text,
+          softWrap: false,
+          style: _hovered ? widget.style.copyWith(color: MacosTheme.of(context).primaryColor) : widget.style,
+        ),
+      ),
+    );
   }
 }

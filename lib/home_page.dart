@@ -285,10 +285,10 @@ class _HomePageState extends State<HomePage> {
     // Пустой заголовок — первая фраза заметок (или «Встреча без заметок»).
     await _store.finish(recorded.dir, title: title);
     await _store.setProcessing(recorded.dir, false);
-    // Расшифровка есть — звук больше не нужен (заметки пишутся заново по расшифровке).
-    // Нет — оставляем, чтобы встречу можно было обработать заново.
+    // Расшифровка есть — WAV для неё больше не нужны: сжимаем в audio.m4a для прослушивания.
+    // Нет — оставляем как есть, чтобы встречу можно было обработать заново.
     if (await File('$key/transcript.md').exists()) {
-      await _store.deleteAudio(recorded.dir);
+      await _store.archiveAudio(recorded.dir);
     }
     if (mounted) setState(() => _notesJobs.remove(key));
     await _reload();
@@ -320,6 +320,15 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Встречи, записанные до сжатия звука (WAV лежат после обработки), — сжать в фоне.
+  Future<void> _archiveOldAudio() async {
+    for (final dir in await _store.unarchived(skip: _notesJobs.keys.toSet())) {
+      if (!mounted) return;
+      if (await _store.archiveAudio(dir)) logLine('Звук сжат: ${dir.path}');
+    }
+    await _reload();
+  }
+
   Future<String> _markdown(Meeting meeting) async => meetingMarkdown(
     meeting,
     summary: await meeting.readSummary(),
@@ -334,6 +343,18 @@ class _HomePageState extends State<HomePage> {
       );
     } catch (e) {
       if (mounted) await _showError('Не удалось экспортировать встречу', '$e');
+    }
+  }
+
+  /// Звук встречи — копией через панель «Сохранить» («2026-10-14 Планёрка.m4a»).
+  Future<void> _saveAudio(Meeting meeting) async {
+    try {
+      await PlatformFiles.saveCopy(
+        suggestedName: exportFileName(meeting, extension: 'm4a'),
+        source: meeting.audioFile,
+      );
+    } catch (e) {
+      if (mounted) await _showError('Не удалось сохранить запись', '$e');
     }
   }
 
@@ -422,6 +443,7 @@ class _HomePageState extends State<HomePage> {
         : () => _regenerateNotes(meeting),
     stopNotes: () => _notesStops[meeting.dir.path]?.stop(),
     export: () => _export(meeting),
+    saveAudio: () => _saveAudio(meeting),
     copyNotes: () => _copyNotes(meeting),
     delete: () => _confirmDelete(meeting),
   );
@@ -594,7 +616,8 @@ class _HomePageState extends State<HomePage> {
       );
     }
     await _reload();
-    if (!selftestMode) unawaited(_resumeUnfinished());
+    // После продолжения прерванной обработки — сжать WAV встреч, записанных до сжатия звука.
+    if (!selftestMode) unawaited(_resumeUnfinished().then((_) => _archiveOldAudio()));
     // ZNAIKA_ASK=<вопрос>[|<уточнение>…] — спросить чат по встречам, вывести ответы и выйти.
     final ask = Platform.environment['ZNAIKA_ASK'];
     if (ask != null) {

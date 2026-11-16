@@ -13,4 +13,9 @@ abstract final class PlatformFiles {
   /// Стандартная панель «Сохранить»; путь сохранённого файла или null, если отменили.
   static Future<String?> saveText({required String suggestedName, required String text}) =>
       _channel.invokeMethod<String>('saveText', {'name': suggestedName, 'text': text});
+
+  /// Панель «Сохранить» для копии готового файла [source] (например, звука встречи);
+  /// путь копии или null, если отменили.
+  static Future<String?> saveCopy({required String suggestedName, required File source}) =>
+      _channel.invokeMethod<String>('saveCopy', {'name': suggestedName, 'source': source.path});
 }

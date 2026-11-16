@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:znaika/audio_archive.dart';
 import 'package:znaika/database.dart';
 import 'package:znaika/meetings.dart';
 import 'package:znaika/summarizer.dart';
@@ -71,7 +74,7 @@ void main() {
     expect((await store.list()).map((m) => m.title), ['Релиз 2.0 в пятницу', 'Обсудили бюджет.']);
   });
 
-  test('после обработки звук удаляется, встреча остаётся — по расшифровке', () async {
+  test('после обработки звук сжимается в audio.m4a, встреча остаётся', () async {
     final root = await Directory.systemTemp.createTemp('meetings_audio');
     final db = AppDatabase(NativeDatabase.memory());
     addTearDown(() async {
@@ -80,20 +83,52 @@ void main() {
     });
     final store = MeetingStore(root, db);
     final dir = await store.create(DateTime(2026, 10, 13, 10));
-    for (final name in ['mic.wav', 'system.wav']) {
-      await File('${dir.path}/$name').writeAsString('x');
+    // Две секунды «речи» в каждом канале (синус) — настоящие WAV, как пишет захват.
+    for (final (name, hz) in [('mic.wav', 220.0), ('system.wav', 330.0)]) {
+      final samples = Int16List.fromList([for (var i = 0; i < 32000; i++) (8000 * sin(2 * pi * hz * i / 16000)).round()]);
+      await File('${dir.path}/$name').writeAsBytes([...wavHeader(samples.length), ...samples.buffer.asUint8List()]);
     }
     await File('${dir.path}/transcript.md').writeAsString('# Расшифровка\n\n[00:01] Я: Привет.\n');
     await store.finish(dir, title: 'Планёрка');
 
-    await store.deleteAudio(dir);
+    expect(await store.unarchived(), [isA<Directory>().having((d) => d.path, 'path', dir.path)]);
+    expect(await store.archiveAudio(dir), isTrue);
     expect(File('${dir.path}/mic.wav').existsSync(), isFalse);
     expect(File('${dir.path}/system.wav').existsSync(), isFalse);
-    // Без звука, но с расшифровкой — по-прежнему встреча, и после перезапуска (sync) тоже.
+    expect(File('${dir.path}/$audioFileName').lengthSync(), greaterThan(1024));
+    expect(Directory(dir.path).listSync().map((e) => e.uri.pathSegments.last).where((n) => n.startsWith('.')), isEmpty);
+    expect(await store.unarchived(), isEmpty);
+    // Без WAV, с расшифровкой и звуком — по-прежнему встреча, и после перезапуска (sync) тоже.
     expect(await store.sync(), (added: 0, removed: 0));
     final fresh = MeetingStore(root, AppDatabase(NativeDatabase.memory()));
     expect(await fresh.sync(), (added: 1, removed: 0));
     expect((await fresh.list()).single.title, 'Планёрка');
+  });
+
+  test('сжатие не удалось (не WAV) — исходники остаются', () async {
+    final root = await Directory.systemTemp.createTemp('meetings_audio_bad');
+    addTearDown(() => root.delete(recursive: true));
+    await File('${root.path}/mic.wav').writeAsString('не звук');
+    expect(await archiveMeetingAudio(root), isFalse);
+    expect(File('${root.path}/mic.wav').existsSync(), isTrue);
+    expect(File('${root.path}/$audioFileName').existsSync(), isFalse);
+  });
+
+  test('сведение каналов: сумма с ограничением, длина — по длинному', () async {
+    expect(clampToPcm16(Int32List.fromList([100, 40000, -40000, -5])), [100, 32767, -32768, -5]);
+    final root = await Directory.systemTemp.createTemp('mix');
+    addTearDown(() => root.delete(recursive: true));
+    Future<String> wav(String name, List<int> samples) async {
+      final path = '${root.path}/$name';
+      await File(path).writeAsBytes([...wavHeader(samples.length), ...Int16List.fromList(samples).buffer.asUint8List()]);
+      return path;
+    }
+
+    final out = mixWavFiles([await wav('a.wav', [1000, 2000, 30000]), await wav('b.wav', [10, 20, 30000, 7])], '${root.path}/m.wav');
+    final reader = WavReader(out);
+    expect(reader.samples, 4);
+    expect(reader.read(0, 4), [1010, 2020, 32767, 7]);
+    reader.close();
   });
 
   test('незаконченная обработка: пометка переживает finish и перезапуск, снимается', () async {
@@ -167,6 +202,7 @@ void main() {
     expect(md, startsWith('# Релиз 2.0: перенос / пятница?\n\n_13 октября 2026, 09:05 · 1 ч 05 мин_\n\n## Кратко'));
     expect(md, contains('## Расшифровка\n\n[00:01] Я: Привет.'));
     expect(exportFileName(meeting), '2026-10-13 Релиз 2.0 перенос пятница.md');
+    expect(exportFileName(meeting, extension: 'm4a'), '2026-10-13 Релиз 2.0 перенос пятница.m4a');
     final long = Meeting(dir: Directory('/tmp/y'), title: 'а' * 200, startedAt: DateTime(2026, 1, 2));
     expect(exportFileName(long).length, lessThanOrEqualTo('2026-01-02 .md'.length + 80));
   });

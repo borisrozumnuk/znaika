@@ -7,6 +7,7 @@
 // шрифт — системный SF Pro (из /System/Library/Fonts), иконки — CupertinoIcons.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:drift/native.dart';
@@ -18,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:macos_ui/macos_ui.dart';
 import 'package:meet_capture/meet_capture.dart';
 import 'package:znaika/app_globals.dart';
+import 'package:znaika/audio_player.dart';
 import 'package:znaika/chat_page.dart';
 import 'package:znaika/database.dart';
 import 'package:znaika/home_page.dart';
@@ -73,6 +75,10 @@ void main() {
     for (final demo in _demoMeetings(today)) {
       final dir = await meetingStore.create(demo.at);
       await File('${dir.path}/transcript.md').writeAsString('# Расшифровка\n\n${demo.transcript.join('\n')}\n');
+      // У главной демо-встречи есть звук — в окне виден плеер с «волной».
+      if (demo.title == 'Планирование релиза 2.4') {
+        await File('${dir.path}/audio.m4a').writeAsBytes(List.filled(4096, 0));
+      }
       if (demo.summary != null) {
         await File('${dir.path}/summary.md').writeAsString('# Заметки по встрече\n\n${demo.summary}\n');
       }
@@ -95,6 +101,17 @@ void main() {
       messenger.setMockMethodCallHandler(MethodChannel(name), (_) async => null);
     }
     messenger.setMockMethodCallHandler(SystemChannels.menu, (_) async => null);
+    // Плеер: 47 минут, позиция 12:40, «волна» похожа на речь — фразы и паузы.
+    messenger.setMockMethodCallHandler(const MethodChannel('znaika/player'), (call) async {
+      return switch (call.method) {
+        'open' => 47 * 60.0,
+        'waveform' => [
+            for (var i = 0; i < 240; i++)
+              (i % 23 < 2 ? 0.04 : 0.25 + 0.75 * ((math.sin(i * 1.7) * math.sin(i * 0.37) + 1) / 2)).toDouble(),
+          ],
+        _ => null,
+      };
+    });
     messenger.setMockMethodCallHandler(const MethodChannel('appkit_ui_element_colors'), (call) async {
       if (call.method == 'getColor') return 0xFF007AFF;
       final components = ((call.arguments as Map)['components'] as List).cast<String>();
@@ -106,6 +123,10 @@ void main() {
     testWidgets('README: встреча с заметками — ${mode.name}', skip: !_enabled, variant: TargetPlatformVariant.only(TargetPlatform.macOS), (tester) async {
       await _pump(tester, const HomePage(), mode);
       await tester.tap(find.text('Планирование релиза 2.4'));
+      await _settle(tester);
+      // Прослушано больше четверти — видно, как «волна» окрашивается.
+      final wave = tester.getRect(find.byType(WaveformSeekBar));
+      await tester.tapAt(Offset(wave.left + wave.width * 0.27, wave.center.dy));
       await _settle(tester);
       await _shot(tester, 'meeting-${mode.name}', mode);
       await _finish(tester);

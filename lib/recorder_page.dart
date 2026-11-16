@@ -225,7 +225,7 @@ class _RecorderPageState extends State<RecorderPage> {
     if (summary != null && summary.isNotEmpty) title = await summarizer.makeTitle(summary);
     stdout.writeln('SELFTEST title «$title» in ${watch.elapsedMilliseconds} ms');
     await widget.store.finish(dir, title: title, durationSeconds: t?.audioSeconds);
-    if (_error == null && t != null) await widget.store.deleteAudio(dir);
+    if (_error == null && t != null) await widget.store.archiveAudio(dir);
     if (_error != null) stdout.writeln('SELFTEST error: $_error');
     exit(_error == null ? 0 : 1);
   }

@@ -3,11 +3,13 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 
+import 'audio_archive.dart';
 import 'database.dart';
 import 'echo_filter.dart';
 
-/// Встреча = папка записи: transcript.md, summary.md и meeting.json; system.wav и mic.wav —
-/// только пока встреча не обработана (после обработки звук удаляется, см. [MeetingStore.deleteAudio]).
+/// Встреча = папка записи: transcript.md, summary.md и meeting.json; звук — system.wav и
+/// mic.wav, пока встреча не обработана, затем сжатый audio.m4a для прослушивания
+/// (см. [MeetingStore.archiveAudio]).
 class Meeting {
   final Directory dir;
   final String title;
@@ -20,6 +22,9 @@ class Meeting {
 
   File get summaryFile => File('${dir.path}/summary.md');
   File get transcriptFile => File('${dir.path}/transcript.md');
+
+  /// Сжатый звук встречи для прослушивания (есть после обработки).
+  File get audioFile => File('${dir.path}/$audioFileName');
 
   /// Выжимка без служебного заголовка «# Заметки по встрече».
   Future<String?> readSummary() async {
@@ -290,17 +295,27 @@ class MeetingStore {
   /// обработанная). Ни того ни другого — прерванный старт.
   Future<bool> _isMeeting(Directory dir) async =>
       await File('${dir.path}/transcript.md').exists() ||
+      await File('${dir.path}/$audioFileName').exists() ||
       await File('${dir.path}/mic.wav').exists() ||
       await File('${dir.path}/system.wav').exists();
 
-  /// Звук встречи больше не нужен: расшифровка и заметки готовы, всё остальное
-  /// (заметки заново, имена, поиск, экспорт) работает по расшифровке. Звук занимает
-  /// ~230 МБ на час встречи, поэтому после обработки удаляется.
-  Future<void> deleteAudio(Directory dir) async {
-    for (final name in ['mic.wav', 'system.wav']) {
-      final file = File('${dir.path}/$name');
-      if (await file.exists()) await file.delete();
+  /// Встреча обработана: WAV (~230 МБ на час) больше не нужны для расшифровки — сводятся
+  /// и сжимаются в audio.m4a (~14 МБ на час) для прослушивания. Не удалось — WAV остаются.
+  Future<bool> archiveAudio(Directory dir) => archiveMeetingAudio(dir);
+
+  /// Обработанные встречи, у которых ещё лежат WAV (записаны до сжатия звука или сжатие
+  /// не удалось), — сжать при запуске. [skip] — папки, которые сейчас обрабатываются.
+  Future<List<Directory>> unarchived({Set<String> skip = const {}}) async {
+    final result = <Directory>[];
+    for (final meeting in await list()) {
+      final dir = meeting.dir;
+      if (skip.contains(dir.path) || (await _readMeta(dir))?['processing'] == true) continue;
+      if (!await meeting.transcriptFile.exists()) continue;
+      if (await File('${dir.path}/mic.wav').exists() || await File('${dir.path}/system.wav').exists()) {
+        result.add(dir);
+      }
     }
+    return result;
   }
 
   String _folderOf(Directory dir) => dir.uri.pathSegments.where((s) => s.isNotEmpty).last;
@@ -399,12 +414,12 @@ String meetingMarkdown(Meeting meeting, {String? summary, List<String> transcrip
 }
 
 /// «2026-10-13 Перенос демо.md»: дата для сортировки в Finder, без символов, запрещённых в именах.
-String exportFileName(Meeting meeting) {
+String exportFileName(Meeting meeting, {String extension = 'md'}) {
   final d = meeting.startedAt;
   final date = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   final title = meeting.title.replaceAll(RegExp(r'[/:\\?*"<>|\n]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   final short = title.length > 80 ? title.substring(0, 80).trim() : title;
-  return '$date ${short.isEmpty ? 'Встреча' : short}.md';
+  return '$date ${short.isEmpty ? 'Встреча' : short}.$extension';
 }
 
 /// «12 мин», «1 ч 05 мин», «45 с».
