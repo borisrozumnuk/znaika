@@ -472,8 +472,11 @@ class Summarizer {
       while (parts.length > 1 &&
           await _locked(stop: stop, () async => (await _ensureEngine()).countTokens(parts.join('\n\n'))) >
               _chunkTokens) {
-        final groups = await _locked(stop: stop, () async => _splitByTokens(await _ensureEngine(), parts, _chunkTokens));
-        if (groups.length == parts.length) break;
+        final current = parts;
+        final groups = await _locked(stop: stop, () async {
+          final engine = await _ensureEngine();
+          return groupForMerge(current, engine.countTokens, _chunkTokens);
+        });
         final merged = <String>[];
         for (var i = 0; i < groups.length; i++) {
           onProgress?.call('Объединяю заметки ${i + 1}/${groups.length}…');
@@ -561,20 +564,39 @@ class Summarizer {
 }
 
 /// Режет расшифровку на части не длиннее [limit] токенов, не разрывая реплики.
-List<String> _splitByTokens(LlmEngine engine, List<String> lines, int limit) {
+List<String> _splitByTokens(LlmEngine engine, List<String> lines, int limit) =>
+    splitByTokens(lines, engine.countTokens, limit);
+
+/// Заметки частей → группы для объединения, каждая — в один запрос. Групп всегда меньше,
+/// чем заметок: если по [limit] вместе не помещается ни одна пара (каждая заметка больше
+/// половины лимита — так пишет многословная E2B), — попарно. Пара заметок по ~2000 токенов
+/// в контекст 8192 помещается, а их число за проход падает вдвое. Раньше в этом случае
+/// объединение бросалось, и итоговый запрос получал все заметки сразу: «Input token ids are
+/// too long … 12198 >= 8192» на E2B.
+List<String> groupForMerge(List<String> parts, int Function(String) count, int limit) {
+  final groups = splitByTokens(parts, count, limit, separator: '\n\n');
+  if (groups.length < parts.length) return groups;
+  return [
+    for (var i = 0; i < parts.length; i += 2) parts.sublist(i, i + 2 > parts.length ? parts.length : i + 2).join('\n\n'),
+  ];
+}
+
+/// Склеивает [items] по порядку в куски не длиннее [limit] токенов (по [count]), не разрывая
+/// элементы; элемент длиннее лимита — отдельным куском.
+List<String> splitByTokens(List<String> items, int Function(String) count, int limit, {String separator = '\n'}) {
   final chunks = <String>[];
   var current = <String>[];
   var size = 0;
-  for (final line in lines) {
-    final tokens = engine.countTokens(line) + 1;
+  for (final line in items) {
+    final tokens = count(line) + 1;
     if (current.isNotEmpty && size + tokens > limit) {
-      chunks.add(current.join('\n'));
+      chunks.add(current.join(separator));
       current = [];
       size = 0;
     }
     current.add(line);
     size += tokens;
   }
-  if (current.isNotEmpty) chunks.add(current.join('\n'));
+  if (current.isNotEmpty) chunks.add(current.join(separator));
   return chunks;
 }
