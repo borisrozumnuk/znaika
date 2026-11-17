@@ -56,13 +56,15 @@ Future<Transcript> transcribeRecording({required String recordingDir, required S
   return transcript;
 }
 
-/// Модель отпечатков голоса (3D-Speaker ERes2Net, VoxCeleb). Необязательная: без неё
+/// Модель отпечатков голоса (3D-Speaker ERes2NetV2). Необязательная: без неё
 /// все собеседники идут одной меткой «Собеседники».
-const speakerModelFile = '3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx';
+const speakerModelFile = '3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx';
 
-/// Порог сходства «тот же голос» для этой модели. Подобран моделированием 300 встреч
-/// по 2–5 русских дикторов VoxForge тем же алгоритмом: 99,2% реплик подписаны верно,
-/// число собеседников угадано в 90% встреч (0,53 и 0,57 — чуть хуже).
+/// Порог сходства «тот же голос» для этой модели. Подобран вместе с порогом разреза
+/// (speakerChangeThreshold) на синтетических созвонах 3–7 русских дикторов VoxForge (сжатие
+/// Opus, перебивания): 96% речи подписано верно (шаг точек разреза 0,5 с), число собеседников
+/// угадано в 90% встреч; на созвоне 7 человек (89 мин) — 7 голосов. У ERes2NetV2 сходство
+/// одного голоса ~0,60, разных — ~0,20.
 const speakerThreshold = 0.55;
 
 /// «Собеседник 1», «Собеседник 2»… — по номеру голоса с нуля.
@@ -74,8 +76,10 @@ so.SpeakerEmbeddingExtractor? createSpeakerExtractor(String modelsDir) {
   final path = '$modelsDir/$speakerModelFile';
   if (!File(path).existsSync()) return null;
   try {
+    // 4 потока: ERes2NetV2 в 2,3 раза тяжелее прежней ERes2Net, с 2 потоками 90% реплик
+    // на лету появлялись до 1,7 с после конца фразы, с 4 — до 1,1 с (как было).
     return so.SpeakerEmbeddingExtractor(
-      config: so.SpeakerEmbeddingExtractorConfig(model: path, numThreads: 2, debug: false),
+      config: so.SpeakerEmbeddingExtractorConfig(model: path, numThreads: 4, debug: false),
     );
   } catch (_) {
     return null;

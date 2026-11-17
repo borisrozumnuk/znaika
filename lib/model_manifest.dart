@@ -79,17 +79,19 @@ const asrPackage = ModelPackage(
 const speakersPackage = ModelPackage(
   id: 'speakers',
   title: 'Различение собеседников',
-  description: 'Отпечатки голоса: 3D-Speaker ERes2Net (VoxCeleb) · Apache 2.0',
+  description: 'Отпечатки голоса: 3D-Speaker ERes2NetV2 · Apache 2.0',
   files: [
-    // Выбрана замером на русской речи (VoxForge RU: 9 дикторов, 199 фраз, пары из разных
-    // сессий): EER 1,4% — лучшая среди моделей sherpa-onnx (CAM++ zh+en — 3,2%,
-    // TitaNet small — 1,6%, WeSpeaker ResNet34 — 10,8%).
+    // Выбрана сравнением во всём конвейере (разрез по смене голоса + кластеризация, пороги
+    // под каждую модель) на синтетических созвонах русских дикторов VoxForge: верно подписано
+    // 97–98% речи против 93–95% у ERes2Net VoxCeleb (была до 1.0.5), CAM++ zh/en — 95–97%,
+    // TitaNet-large — 92%, WeSpeaker ResNet34 — 55%; на созвоне 7 человек (89 мин) — ровно
+    // 7 голосов (ERes2Net — 9, CAM++ — 10). Цена — в 2,3 раза дольше ERes2Net (~66 мс на окно 1,5 с).
     ModelFile(
-      path: '3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx',
+      path: '3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx',
       url: 'https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/'
-          '0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx',
-      size: 26485263,
-      sha256: 'c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5',
+          '0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx',
+      size: 71441526,
+      sha256: 'bf1a75b9930474cf3389ef415e6e5d38ca96fea4a3a00f7e301d080a58ee2239',
     ),
   ],
 );
@@ -163,8 +165,12 @@ const gemmaE2b = SummaryModel(
 
 const summaryModels = [gemmaE4b, gemmaE2b];
 
-/// Файлы убранных моделей заметок — удаляются при запуске (2,7 ГБ Qwen3 4B).
-const droppedModelFiles = ['qwen3_4b_instruct_2507_mixed_int4.litertlm'];
+/// Файлы убранных моделей — удаляются при запуске: Qwen3 4B (2,7 ГБ, до 1.0.4) и прежняя
+/// модель отпечатков голоса ERes2Net VoxCeleb (26 МБ, до 1.0.5).
+const droppedModelFiles = [
+  'qwen3_4b_instruct_2507_mixed_int4.litertlm',
+  '3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx',
+];
 
 /// Рекомендованная модель для этого Mac по объёму памяти: E4B во float32 занимает
 /// около 4 ГБ, на 8 ГБ вместе с системой, расшифровкой и браузером ей тесно.
