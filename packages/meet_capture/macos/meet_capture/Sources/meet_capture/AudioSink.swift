@@ -13,8 +13,11 @@ final class AudioSink {
 
     let name: String
     let url: URL
-    private let inputFormat: AVAudioFormat
-    private let converter: AVAudioConverter
+    private(set) var inputFormat: AVAudioFormat
+    private var converter: AVAudioConverter
+
+    /// Смены частоты входа за запись — для журнала («12,3 с: 48000 → 24000 Гц»).
+    private(set) var rateChanges: [String] = []
     private var file: AVAudioFile?
     private let lock = NSLock()
 
@@ -70,7 +73,36 @@ final class AudioSink {
             outStatus.pointee = .haveData
             return buffer
         }
-        guard status != .error, out.frameLength > 0, let samples = out.floatChannelData?[0] else { return }
+        guard status != .error else { return }
+        emit(out)
+    }
+
+    /// Вход дальше идёт с частотой [rate]: досводим то, что конвертер держит внутри, и
+    /// перестраиваем его. Без этого звук после смены частоты (AirPods включили микрофон —
+    /// 48 → 24 кГц) пересчитывался бы по старой и выходил ускоренным вдвое, а конец
+    /// дорожки — тишиной. Вызывается из очереди обработки; [format] — новый формат входа.
+    func changeInput(to format: AVAudioFormat) {
+        guard format.sampleRate != inputFormat.sampleRate || format.channelCount != inputFormat.channelCount,
+              let next = AVAudioConverter(from: format, to: Self.targetFormat)
+        else { return }
+        if let out = AVAudioPCMBuffer(pcmFormat: Self.targetFormat, frameCapacity: 4096) {
+            var error: NSError?
+            _ = converter.convert(to: out, error: &error) { _, outStatus in
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            emit(out)
+        }
+        next.downmix = true
+        rateChanges.append(String(format: "%.1f с: %.0f → %.0f Гц", seconds, inputFormat.sampleRate, format.sampleRate))
+        FileHandle.standardError.write("\(name): частота входа \(rateChanges.last!)\n".data(using: .utf8)!)
+        inputFormat = format
+        converter = next
+    }
+
+    /// Отсчёты 16 кГц — в поток расшифровки, в файл и в уровень.
+    private func emit(_ out: AVAudioPCMBuffer) {
+        guard out.frameLength > 0, let samples = out.floatChannelData?[0] else { return }
         onSamples?(UnsafeBufferPointer(start: samples, count: Int(out.frameLength)))
 
         lock.lock()

@@ -14,12 +14,15 @@ import 'dart:typed_data';
 /// на 89-минутном созвоне 7 человек их набралось 49. После встречи [consolidated]
 /// сливает такие голоса с ближайшими настоящими.
 class SpeakerClusters {
-  SpeakerClusters({this.sameSpeakerThreshold = 0.5, this.minSecondsForNewSpeaker = 1.5});
+  SpeakerClusters({this.sameSpeakerThreshold = 0.5, this.minSecondsForNewSpeaker = 1.0});
 
   /// Сходство, начиная с которого реплика считается тем же голосом.
   final double sameSpeakerThreshold;
 
-  /// Реплики короче этого не заводят нового собеседника.
+  /// Реплики короче этого не заводят нового собеседника. 1 с, а не 1,5: на коротком созвоне
+  /// пяти человек, где почти все реплики — приветствия и короткие фразы, при 1,5 с все
+  /// оказывались одним голосом. На синтетических созвонах точность та же (96,1% против 96,4%),
+  /// на созвоне 7 человек — по-прежнему 7 голосов.
   final double minSecondsForNewSpeaker;
 
   final _centroids = <Float32List>[];

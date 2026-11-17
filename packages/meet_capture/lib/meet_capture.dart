@@ -32,7 +32,17 @@ class CapturedFile {
   /// Пиковое значение 0…1; 0 — цифровая тишина.
   final double peak;
 
-  const CapturedFile({required this.channel, required this.path, required this.seconds, required this.peak});
+  /// Смены частоты устройства за запись («12,3 с: 48000 → 24000 Гц»): AirPods, включая
+  /// микрофон, переходят в режим гарнитуры. Звук пересчитан с учётом смены.
+  final List<String> rateChanges;
+
+  const CapturedFile({
+    required this.channel,
+    required this.path,
+    required this.seconds,
+    required this.peak,
+    this.rateChanges = const [],
+  });
 }
 
 /// Порция звука одного канала: 16 кГц, моно, Float32.
@@ -121,6 +131,7 @@ class MeetCapture {
             path: f['path'] as String,
             seconds: (f['seconds'] as num).toDouble(),
             peak: (f['peak'] as num).toDouble(),
+            rateChanges: [for (final c in f['rateChanges'] as List<Object?>? ?? const []) '$c'],
           ),
       ],
       [for (final e in tail.entries) AudioChunk(e.key as String, e.value as Float32List)],

@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:macos_ui/macos_ui.dart';
+import 'package:meet_capture/meet_capture.dart';
 import 'package:znaika/app_globals.dart';
 import 'package:znaika/audio_player.dart';
 import 'package:znaika/chat_page.dart';
@@ -16,7 +17,9 @@ import 'package:znaika/meeting_view.dart';
 import 'package:znaika/meetings.dart';
 import 'package:znaika/model_manager.dart';
 import 'package:znaika/model_manifest.dart';
+import 'package:znaika/recorder_page.dart';
 import 'package:znaika/setup_page.dart';
+import 'package:znaika/transcriber.dart';
 import 'package:znaika/ui.dart';
 
 /// Тесты интерфейса — как на macOS (по умолчанию flutter_test притворяется Android:
@@ -419,6 +422,38 @@ void main() {
   });
   }
 
+  macTest('«Скопировать заметки» — только когда заметки готовы', (tester) async {
+    final actions = MeetingActions(
+      rename: (_) async {},
+      renameSpeaker: (_, _) async {},
+      export: () {},
+      copyNotes: () {},
+      delete: () {},
+    );
+    final copyIcon = find.byWidgetPredicate((w) => w is MacosIcon && w.icon == CupertinoIcons.doc_on_clipboard);
+    // Заметок нет (только расшифровка) — кнопки нет.
+    await pump(tester, MacosWindow(child: MeetingView(meeting: withHint, actions: actions)),
+        mode: ThemeMode.light, size: const Size(760, 520));
+    await settle(tester, until: find.text('Участники:'));
+    expect(copyIcon, findsNothing);
+    // Заметки есть — кнопка есть; пока они пишутся заново — нет.
+    await pump(tester, MacosWindow(child: MeetingView(meeting: meeting, actions: actions)),
+        mode: ThemeMode.light, size: const Size(760, 520));
+    await settle(tester, until: find.text('Участники:'));
+    expect(copyIcon, findsOneWidget);
+    await pump(
+      tester,
+      MacosWindow(
+        child: MeetingView(meeting: meeting, actions: actions, notesProgress: const NotesProgress('Пишу выжимку…')),
+      ),
+      mode: ThemeMode.light,
+      size: const Size(760, 520),
+    );
+    await tester.pump();
+    expect(copyIcon, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   macTest('подсказка имени: «Костя?» у собеседника, щелчок — имя', (tester) async {
     final named = <(String, String)>[];
     final actions = MeetingActions(
@@ -511,6 +546,95 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
+  });
+
+  macTest('расшифровка: щелчок по собеседнику — его метка, «Я» и черновик не нажимаются', (tester) async {
+    final tapped = <String>[];
+    await pump(
+      tester,
+      MacosWindow(
+        child: ListView(children: [
+          TranscriptLines(
+            const ['[00:01] Собеседник 1: Начнём с бюджета.', '[00:05] Я: Давайте.', '[00:07] Анна: Согласна.'],
+            pending: const ['[00:09] Собеседники: Тогда я'],
+            onSpeakerTap: tapped.add,
+          ),
+        ]),
+      ),
+      mode: ThemeMode.light,
+      size: const Size(760, 520),
+    );
+    await tester.tapOnText(find.textRange.ofSubstring('🦊'));
+    await tester.tapOnText(find.textRange.ofSubstring('Анна'));
+    await tester.tapOnText(find.textRange.ofSubstring('Я'));
+    await tester.tapOnText(find.textRange.ofSubstring('Собеседники'));
+    expect(tapped, ['Собеседник 1', 'Анна']);
+    expect(tester.takeException(), isNull);
+  });
+
+  macTest('во время записи имя собеседника — сразу у всех его реплик', (tester) async {
+    debugRecorderDemo = (
+      elapsed: const Duration(minutes: 3),
+      micDevice: 'Встроенный микрофон',
+      lines: const [
+        Utterance(1, 3, 'Собеседник 1', 'Начнём с бюджета.'),
+        Utterance(4, 5, 'Я', 'Давайте.'),
+        Utterance(6, 8, 'Собеседник 2', 'Согласна.'),
+        Utterance(9, 11, 'Собеседник 1', 'Тогда по срокам.'),
+      ],
+      partial: null,
+      levels: const CaptureLevels(),
+    );
+    addTearDown(() => debugRecorderDemo = null);
+    await pump(
+      tester,
+      MacosWindow(
+        child: RecorderPage(store: meetingStore, recording: ValueNotifier(false), onRecorded: (_) async {}),
+      ),
+      mode: ThemeMode.light,
+      size: const Size(1280, 800),
+    );
+    await tester.pump();
+    expect(find.textContaining('🦊', findRichText: true), findsNWidgets(2));
+    await tester.tapOnText(find.textRange.ofSubstring('🦊').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Как зовут «🦊»?'), findsOneWidget);
+    await tester.enterText(find.byType(MacosTextField), 'Пётр');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(PushButton, 'Сохранить'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('🦊', findRichText: true), findsNothing);
+    expect(find.textContaining('Пётр', findRichText: true), findsNWidgets(2));
+    expect(find.textContaining('🐻', findRichText: true), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  macTest('щелчок по 🦊 в расшифровке встречи — диалог имени для этого собеседника', (tester) async {
+    final named = <(String, String)>[];
+    final actions = MeetingActions(
+      rename: (_) async {},
+      renameSpeaker: (from, to) async => named.add((from, to)),
+      export: () {},
+      copyNotes: () {},
+      delete: () {},
+    );
+    await pump(tester, MacosWindow(child: MeetingView(meeting: withHint, actions: actions)),
+        mode: ThemeMode.light, size: const Size(760, 520));
+    await settle(tester, until: find.text('Участники:'));
+    await tester.tap(find.textContaining('Расшифровка · 2 реплик'));
+    await tester.pumpAndSettle();
+    // Собеседник 2 (🐻) — первая реплика.
+    await tester.tapOnText(find.textRange.ofSubstring('🐻').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Как зовут «🐻»?'), findsOneWidget);
+    await tester.enterText(find.byType(MacosTextField), 'Олег');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(PushButton, 'Сохранить'));
+    await tester.pumpAndSettle();
+    expect(named, [('Собеседник 2', 'Олег')]);
+    expect(tester.takeException(), isNull);
   });
 
   macTest('расшифровка: черновик фразы — после реплик, с многоточием, собеседники по голосам', (tester) async {

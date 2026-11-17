@@ -230,6 +230,22 @@ Transcript _transcribe(String recordingDir, String modelsDir) {
   return Transcript(dropEchoes(relabelSpeakers(utterances, clusters.consolidated())), audioSeconds, watch.elapsed);
 }
 
+/// Имена, данные голосам во время записи: «Собеседник N» → [names]. Голос, слитый после
+/// встречи с названным ([merged], см. SpeakerClusters.consolidated), получает то же имя.
+/// Имя может быть и меткой другого голоса («Собеседник 2») — тогда голоса объединяются.
+List<Utterance> applySpeakerNames(List<Utterance> utterances, Map<String, String> names, List<int> merged) {
+  if (names.isEmpty) return utterances;
+  final all = {...names};
+  for (final (voice, into) in merged.indexed) {
+    final name = names[otherSpeakerLabel(into)];
+    if (name != null) all.putIfAbsent(otherSpeakerLabel(voice), () => name);
+  }
+  return [
+    for (final u in utterances)
+      if (all[u.speaker] case final name?) Utterance(u.start, u.end, name, u.text) else u,
+  ];
+}
+
 /// Метки собеседников после встречи: «Собеседник N» → итоговый голос по [merged]
 /// (номер голоса с нуля → номер, с которым он слит, см. SpeakerClusters.consolidated),
 /// затем номера по порядку первой реплики: 1, 2, 3… без пропусков.

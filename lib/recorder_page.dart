@@ -114,6 +114,11 @@ class _RecorderPageState extends State<RecorderPage> {
 
   /// Реплики, распознанные во время записи, по порядку времени.
   final _liveUtterances = <Utterance>[];
+
+  /// Имена, данные собеседникам во время записи: метка голоса на лету («Собеседник 3») →
+  /// имя. Показываются сразу во всех репликах этого голоса (и в новых), а после «Стоп»
+  /// переносятся в расшифровку (LiveTranscriber.finish).
+  final _speakerNames = <String, String>{};
   ScrollController? _scroll;
   String? _summaryStage;
   String? _summary;
@@ -360,6 +365,7 @@ class _RecorderPageState extends State<RecorderPage> {
       _transcript = null;
       _summary = null;
       _liveUtterances.clear();
+      _speakerNames.clear();
       _partials.clear();
     });
     try {
@@ -480,6 +486,11 @@ class _RecorderPageState extends State<RecorderPage> {
       for (final chunk in stopped.tail) {
         _live?.feed(chunk.channel, chunk.samples);
       }
+      for (final file in stopped.files) {
+        for (final change in file.rateChanges) {
+          logLine('Запись ${file.channel}: частота устройства сменилась, $change');
+        }
+      }
       setState(() => _files = stopped.files);
     } catch (e) {
       setState(() => _error = _describeError(e));
@@ -537,6 +548,7 @@ class _RecorderPageState extends State<RecorderPage> {
     final dir = _recordingDir;
     final live = _live;
     _live = null;
+    final names = Map.of(_speakerNames);
     await _liveSub?.cancel();
     await _partialSub?.cancel();
     if (_error != null || dir == null) {
@@ -554,7 +566,7 @@ class _RecorderPageState extends State<RecorderPage> {
       if (live != null) {
         final watch = Stopwatch()..start();
         try {
-          transcript = Transcript(await live.finish(), duration, watch.elapsed);
+          transcript = Transcript(await live.finish(names: names), duration, watch.elapsed);
           await saveTranscript(dir, transcript);
         } catch (e) {
           logLine('Расшифровка на лету не удалась, расшифровываю файлы: $e');
@@ -571,11 +583,35 @@ class _RecorderPageState extends State<RecorderPage> {
     // системном канале (по _files) остаётся до неё.
     setState(() {
       _liveUtterances.clear();
+      _speakerNames.clear();
       _partials.clear();
       _transcript = null;
       _summary = null;
     });
     await widget.onRecorded(RecordedMeeting(dir: Directory(dir), transcribe: transcribe, summarize: summarize));
+  }
+
+  /// Реплика с именем, если его дали голосу во время записи.
+  Utterance _named(Utterance u) => switch (_speakerNames[u.speaker]) {
+        final name? => Utterance(u.start, u.end, name, u.text),
+        _ => u,
+      };
+
+  /// Щелчок по собеседнику в расшифровке во время записи: имя сразу у всех его реплик.
+  /// [shown] — как он подписан сейчас (🦊 или уже данное имя).
+  Future<void> _nameSpeaker(String shown) async {
+    final shownAll = {for (final u in _liveUtterances) if (u.speaker != meLabel) _named(u).speaker}.toList();
+    final name = await askSpeakerName(context, shown, others: shownAll);
+    if (name == null || name == shown || !mounted) return;
+    setState(() {
+      // Все голоса, подписанные сейчас так же (в том числе слитые раньше под одним именем).
+      for (final label in {for (final u in _liveUtterances) u.speaker}) {
+        if (label != meLabel && (_speakerNames[label] ?? label) == shown) {
+          // Имя другого собеседника или его метка — объединить с ним.
+          _speakerNames[label] = name;
+        }
+      }
+    });
   }
 
   /// Черновики по времени начала. Черновик «Я», пока звучит черновик собеседников,
@@ -757,8 +793,9 @@ class _RecorderPageState extends State<RecorderPage> {
               style: typography.body.copyWith(color: secondaryLabel(context)))
         else
           TranscriptLines(
-            dropEchoes(_liveUtterances).map((u) => u.line).toList(),
+            [for (final u in dropEchoes(_liveUtterances)) _named(u).line],
             pending: _pendingLines(),
+            onSpeakerTap: _nameSpeaker,
           ),
       ],
       if (_transcribing) ...[

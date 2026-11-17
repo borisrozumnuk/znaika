@@ -1,9 +1,11 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show SelectionArea;
 import 'package:flutter/services.dart';
 import 'package:macos_ui/macos_ui.dart';
 
 import 'audio_player.dart';
+import 'echo_filter.dart';
 import 'meetings.dart';
 import 'speaker_emoji.dart';
 import 'speaker_hints.dart';
@@ -87,6 +89,9 @@ class _MeetingViewState extends State<MeetingView> {
   /// передаёт новый объект встречи (после правок), а не на каждый кадр генерации.
   late Future<List<Object?>> _data = _load();
 
+  /// Заметки уже написаны — только тогда в панели есть «Скопировать заметки».
+  bool _hasNotes = false;
+
   /// Плеер звука встречи (audio.m4a), если он есть; переоткрывается при выборе другой встречи.
   MeetingAudio? _audio;
   String? _audioPath;
@@ -109,11 +114,25 @@ class _MeetingViewState extends State<MeetingView> {
     if (mounted) setState(() {});
   }
 
-  Future<List<Object?>> _load() => Future.wait([
-        widget.meeting.readSummary(),
-        widget.meeting.readTranscript(),
-        widget.meeting.notesOutdated(),
-      ]);
+  Future<List<Object?>> _load() {
+    final path = widget.meeting.dir.path;
+    return Future.wait([
+      widget.meeting.readSummary(),
+      widget.meeting.readTranscript(),
+      widget.meeting.notesOutdated(),
+    ])
+      ..then(
+        (data) {
+          final hasNotes = (data[0] as String?)?.trim().isNotEmpty ?? false;
+          // Пока читали, могли выбрать другую встречу.
+          if (mounted && widget.meeting.dir.path == path && hasNotes != _hasNotes) {
+            setState(() => _hasNotes = hasNotes);
+          }
+        },
+        // Встречу удалили, пока читали: ошибку показывает FutureBuilder, здесь — не нужна.
+        onError: (Object _) {},
+      );
+  }
 
   @override
   void initState() {
@@ -186,17 +205,7 @@ class _MeetingViewState extends State<MeetingView> {
   /// Диалог «Как зовут собеседника?». Пока он открыт, ⌘⌫ в поле не удаляет встречу.
   Future<void> _nameSpeaker(String speaker, List<String> speakers, {String? hint}) async {
     widget.onEditingChanged?.call(true);
-    final name = await showMacosAlertDialog<String>(
-      context: context,
-      builder: (context) => _SpeakerNameDialog(
-        speaker: speaker,
-        hint: hint,
-        others: [
-          for (final s in speakers)
-            if (s != speaker) s,
-        ],
-      ),
-    );
+    final name = await askSpeakerName(context, speaker, others: speakers, hint: hint);
     widget.onEditingChanged?.call(false);
     if (name != null && name != speaker) await widget.actions.renameSpeaker(speaker, name);
   }
@@ -215,13 +224,15 @@ class _MeetingViewState extends State<MeetingView> {
             tooltipMessage: 'Пересоздать заметки',
             onPressed: actions.regenerateNotes,
           ),
-          ToolBarIconButton(
-            label: 'Скопировать заметки',
-            icon: const MacosIcon(CupertinoIcons.doc_on_clipboard),
-            showLabel: false,
-            tooltipMessage: 'Скопировать заметки',
-            onPressed: actions.copyNotes,
-          ),
+          // Заметок ещё нет или они пишутся — копировать нечего.
+          if (_hasNotes && widget.notesProgress == null)
+            ToolBarIconButton(
+              label: 'Скопировать заметки',
+              icon: const MacosIcon(CupertinoIcons.doc_on_clipboard),
+              showLabel: false,
+              tooltipMessage: 'Скопировать заметки',
+              onPressed: actions.copyNotes,
+            ),
           ToolBarIconButton(
             label: 'Удалить',
             icon: const MacosIcon(CupertinoIcons.trash),
@@ -359,6 +370,8 @@ class _MeetingViewState extends State<MeetingView> {
                       title: 'Расшифровка · ${transcript.length} реплик',
                       child: TranscriptLines(
                         transcript,
+                        // Щелчок по 🦊 в реплике — тот же диалог имени, что в «Участниках».
+                        onSpeakerTap: (s) => _nameSpeaker(s, speakers, hint: hints[s]?.name),
                         // Время реплики — ссылка на этот момент записи.
                         onSeek: switch (_audio) {
                           final audio? when audio.ready => (at) => audio.seek(at, andPlay: true),
@@ -465,6 +478,21 @@ class _HintButtonState extends State<_HintButton> {
     );
   }
 }
+
+/// Диалог «Как зовут 🦊?»: имя (или метка другого собеседника — объединить) либо null.
+/// [others] — все собеседники встречи; [hint] — подсказанное имя сразу в поле.
+Future<String?> askSpeakerName(BuildContext context, String speaker, {List<String> others = const [], String? hint}) =>
+    showMacosAlertDialog<String>(
+      context: context,
+      builder: (context) => _SpeakerNameDialog(
+        speaker: speaker,
+        hint: hint,
+        others: [
+          for (final s in others)
+            if (s != speaker) s,
+        ],
+      ),
+    );
 
 /// Имя собеседника: поле ввода с прежней меткой, Enter — сохранить, Esc — отменить.
 class _SpeakerNameDialog extends StatefulWidget {
@@ -588,8 +616,8 @@ class _PencilButtonState extends State<_PencilButton> {
 
 /// Реплики «[мм:сс] Кто: текст»: время — серым моноширинными цифрами, говорящий — полужирным.
 /// [pending] — черновики звучащих фраз: серым курсивом с многоточием, после остальных.
-class TranscriptLines extends StatelessWidget {
-  const TranscriptLines(this.lines, {super.key, this.pending = const [], this.onSeek});
+class TranscriptLines extends StatefulWidget {
+  const TranscriptLines(this.lines, {super.key, this.pending = const [], this.onSeek, this.onSpeakerTap});
 
   final List<String> lines;
   final List<String> pending;
@@ -597,10 +625,39 @@ class TranscriptLines extends StatelessWidget {
   /// Щелчок по времени реплики — слушать запись с этого места (если звук есть).
   final void Function(Duration at)? onSeek;
 
+  /// Щелчок по собеседнику (🦊 или имени) — дать ему имя; «Я» не нажимается.
+  final ValueChanged<String>? onSpeakerTap;
+
   static final _line = RegExp(r'^\[([\d:]+)\]\s+([^:]+):\s+(.*)$');
 
   @override
+  State<TranscriptLines> createState() => _TranscriptLinesState();
+}
+
+class _TranscriptLinesState extends State<TranscriptLines> {
+  /// По распознавателю щелчка на собеседника — живут, пока жив виджет.
+  final _taps = <String, TapGestureRecognizer>{};
+
+  TapGestureRecognizer? _tapFor(String speaker) {
+    final onTap = widget.onSpeakerTap;
+    if (onTap == null || speaker == meLabel) return null;
+    return (_taps[speaker] ??= TapGestureRecognizer())..onTap = () => onTap(speaker);
+  }
+
+  @override
+  void dispose() {
+    for (final tap in _taps.values) {
+      tap.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final lines = widget.lines;
+    final pending = widget.pending;
+    final onSeek = widget.onSeek;
+    final lineRe = TranscriptLines._line;
     final typography = MacosTheme.of(context).typography;
     final secondary = secondaryLabel(context);
     final timeStyle = typography.body.copyWith(
@@ -609,7 +666,7 @@ class TranscriptLines extends StatelessWidget {
     );
     // Колонка времени — по самой широкой отметке («1:05:23» у встреч длиннее часа) и отступ.
     final widest = [...lines, ...pending]
-        .map((l) => _line.firstMatch(l)?[1] ?? '')
+        .map((l) => lineRe.firstMatch(l)?[1] ?? '')
         .fold('00:00', (a, b) => b.length > a.length ? b : a);
     final timeWidth = (TextPainter(
           text: TextSpan(text: widest, style: timeStyle),
@@ -626,7 +683,7 @@ class TranscriptLines extends StatelessWidget {
           for (final (index, line) in [...lines, ...pending].indexed)
             Padding(
               padding: const EdgeInsets.only(bottom: Gap.related),
-              child: switch (_line.firstMatch(line)) {
+              child: switch (lineRe.firstMatch(line)) {
                 final m? => Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -654,11 +711,17 @@ class TranscriptLines extends StatelessWidget {
                                 ),
                           children: [
                             TextSpan(
-                              text: '${displaySpeaker(m[2]!)}  ',
+                              text: displaySpeaker(m[2]!),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                               ),
+                              // Черновик ещё без голоса — не нажимается.
+                              recognizer: index < lines.length ? _tapFor(m[2]!.trim()) : null,
+                              mouseCursor: index < lines.length && _tapFor(m[2]!.trim()) != null
+                                  ? SystemMouseCursors.click
+                                  : null,
                             ),
+                            const TextSpan(text: '  '),
                             TextSpan(
                               text: index < lines.length ? m[3] : '${m[3]}…',
                             ),

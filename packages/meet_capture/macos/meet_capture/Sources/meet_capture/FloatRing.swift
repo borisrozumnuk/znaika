@@ -8,10 +8,13 @@ import os
 /// Кроме отсчётов хранит отметки о пропусках («здесь не хватает N кадров»):
 /// их ставит IOProc, когда устройство молчало, а обработка вставляет на их место
 /// тишину. Нули в аудиопотоке не пишутся — пропуск может длиться минутами.
+/// И отметки о смене частоты («дальше кадры идут с частотой R»): AirPods, включая
+/// микрофон, переходят с 48 на 24 или 16 кГц.
 final class FloatRing {
     enum ReadResult {
         case samples(Int)
         case silence(Int)
+        case rate(Double)
         case empty
     }
 
@@ -31,6 +34,11 @@ final class FloatRing {
     private let gapLengths: UnsafeMutablePointer<Int>
     private var gapHead = 0
     private var gapCount = 0
+    private static let maxRates = 16
+    private let ratePositions: UnsafeMutablePointer<Int>
+    private let rateValues: UnsafeMutablePointer<Double>
+    private var rateHead = 0
+    private var rateCount = 0
 
     init(channels: Int, capacityFrames: Int) {
         self.channels = channels
@@ -40,6 +48,8 @@ final class FloatRing {
         lock.initialize(to: os_unfair_lock())
         gapPositions = .allocate(capacity: Self.maxGaps)
         gapLengths = .allocate(capacity: Self.maxGaps)
+        ratePositions = .allocate(capacity: Self.maxRates)
+        rateValues = .allocate(capacity: Self.maxRates)
     }
 
     deinit {
@@ -47,6 +57,8 @@ final class FloatRing {
         lock.deallocate()
         gapPositions.deallocate()
         gapLengths.deallocate()
+        ratePositions.deallocate()
+        rateValues.deallocate()
     }
 
     /// Вызывается из IOProc. Если буфер полон, новые кадры отбрасываются.
@@ -98,12 +110,33 @@ final class FloatRing {
         }
     }
 
-    /// Вызывается из очереди обработки: либо отсчёты (до следующего пропуска),
-    /// либо длина тишины, которую надо вставить.
+    /// Отмечает, что следующие кадры идут с частотой `rate`. Вызывается из IOProc.
+    func addRateChange(_ rate: Double) {
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
+        let last = (rateHead + rateCount - 1) % Self.maxRates
+        if rateCount > 0, ratePositions[last] == framesWritten {
+            rateValues[last] = rate
+        } else if rateCount < Self.maxRates {
+            let slot = (rateHead + rateCount) % Self.maxRates
+            ratePositions[slot] = framesWritten
+            rateValues[slot] = rate
+            rateCount += 1
+        }
+    }
+
+    /// Вызывается из очереди обработки: либо новая частота, либо отсчёты (до следующей
+    /// отметки), либо длина тишины, которую надо вставить.
     func read(into dst: UnsafeMutablePointer<Float>, maxFrames: Int) -> ReadResult {
         os_unfair_lock_lock(lock)
         defer { os_unfair_lock_unlock(lock) }
 
+        if rateCount > 0, ratePositions[rateHead] == framesRead {
+            let rate = rateValues[rateHead]
+            rateHead = (rateHead + 1) % Self.maxRates
+            rateCount -= 1
+            return .rate(rate)
+        }
         if gapCount > 0, gapPositions[gapHead] == framesRead {
             let frames = gapLengths[gapHead]
             gapHead = (gapHead + 1) % Self.maxGaps
@@ -112,6 +145,7 @@ final class FloatRing {
         }
         var n = min(maxFrames, count / channels)
         if gapCount > 0 { n = min(n, gapPositions[gapHead] - framesRead) }
+        if rateCount > 0 { n = min(n, ratePositions[rateHead] - framesRead) }
         guard n > 0 else { return .empty }
 
         let total = n * channels

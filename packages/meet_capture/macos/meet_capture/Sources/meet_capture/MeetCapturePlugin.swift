@@ -259,7 +259,10 @@ final class CaptureSession {
         micCapture = nil
         let files = [systemSink, micSink].compactMap { $0 }.map { sink -> [String: Any] in
             sink.close()
-            return ["channel": sink.name, "path": sink.url.path, "seconds": sink.seconds, "peak": Double(sink.peak)]
+            return [
+                "channel": sink.name, "path": sink.url.path, "seconds": sink.seconds, "peak": Double(sink.peak),
+                "rateChanges": sink.rateChanges,
+            ]
         }
         systemSink = nil
         micSink = nil

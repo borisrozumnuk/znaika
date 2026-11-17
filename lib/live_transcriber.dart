@@ -68,7 +68,9 @@ class LiveTranscriber {
 
   /// Дорасшифровывает остаток после остановки записи и закрывает изолят.
   /// Возвращает все реплики по порядку времени, без эха собеседников в микрофоне.
-  Future<List<Utterance>> finish() async {
+  /// [names] — имена, данные голосам во время записи («Собеседник 3» → «Анна»): ставятся до
+  /// перенумерации голосов, и их получают и мелкие голоса, слитые с названным.
+  Future<List<Utterance>> finish({Map<String, String> names = const {}}) async {
     await ready;
     final done = _done = Completer<void>();
     _toIsolate!.send('finish');
@@ -78,7 +80,7 @@ class LiveTranscriber {
     await _utterances.close();
     await _partials.close();
     final sorted = [..._all]..sort((a, b) => a.start.compareTo(b.start));
-    return dropEchoes(relabelSpeakers(sorted, _merged));
+    return dropEchoes(relabelSpeakers(applySpeakerNames(sorted, names, _merged), _merged));
   }
 
   /// Бросает изолят без дорасшифровки (например, запись не удалась).
