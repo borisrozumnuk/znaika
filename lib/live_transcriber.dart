@@ -163,6 +163,9 @@ class _ChannelAudio {
 
   int get end => start + _length;
 
+  /// Весь звук буфера (с отсчёта [start]); годен до следующего изменения буфера.
+  Float32List get samples => Float32List.sublistView(_data, 0, _length);
+
   void append(Float32List samples) {
     if (_length + samples.length > _data.length) {
       final grown = Float32List((_length + samples.length) * 2);
@@ -205,6 +208,7 @@ void _isolateMain((SendPort, String) args) {
   // Без модели отпечатков голоса все собеседники идут одной меткой.
   final extractor = createSpeakerExtractor(modelsDir);
   final clusters = SpeakerClusters(sameSpeakerThreshold: speakerThreshold);
+  final windows = turnWindowsFor(extractor);
 
   // VAD получает звук окнами по 512 отсчётов; неполное окно ждёт следующей порции.
   final remainders = {for (final channel in _channels) channel: Float32List(0)};
@@ -228,13 +232,19 @@ void _isolateMain((SendPort, String) args) {
       clearPartial(channel);
       // Фраза с запасом перед ней (см. vadPreroll) — из буфера канала, если он его ещё держит.
       final end = segment.start + segment.samples.length;
-      final phrase =
-          audio[channel]!.range((segment.start - vadPreroll).clamp(0, end), end) ?? segment.samples;
+      final from = (segment.start - vadPreroll).clamp(0, end);
+      final buffered = audio[channel]!.range(from, end);
+      final phrase = buffered ?? segment.samples;
+      final start = segment.start / sampleRate;
+      if (channel != 'mic') {
+        othersUtterances(recognizer, extractor, clusters, windows, phrase,
+                phraseFrom: buffered == null ? segment.start : from, speechStart: start)
+            .forEach(out.send);
+        continue;
+      }
       final text = recognize(recognizer, phrase);
       if (text.isEmpty) continue;
-      final start = segment.start / sampleRate;
-      final speaker = channel == 'mic' ? meLabel : labelForOthers(extractor, clusters, phrase);
-      out.send(Utterance(start, start + segment.samples.length / sampleRate, speaker, text));
+      out.send(Utterance(start, start + segment.samples.length / sampleRate, meLabel, text));
     }
   }
 
@@ -258,6 +268,15 @@ void _isolateMain((SendPort, String) args) {
     if (text.isEmpty) return;
     a.hasPartial = true;
     out.send(PartialUtterance(channel, a.speechStart! / sampleRate, text));
+  }
+
+  /// Пока собеседник говорит — отпечатки окон для поиска смены голоса (см. TurnWindows):
+  /// к концу фразы останется досчитать только окна у её краёв.
+  void precomputeTurns(String channel) {
+    final a = audio[channel]!;
+    final speech = a.speechStart;
+    if (channel == 'mic' || windows == null || speech == null) return;
+    windows.precompute(a.samples, a.start, speech, a.end);
   }
 
   final inbox = ReceivePort();
@@ -303,6 +322,7 @@ void _isolateMain((SendPort, String) args) {
     remainders[channel] = Float32List.fromList(Float32List.sublistView(samples, whole));
     drain(channel);
     partial(channel);
+    precomputeTurns(channel);
   });
   out.send(inbox.sendPort);
 }

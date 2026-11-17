@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as so;
 
 import 'echo_filter.dart';
+import 'speaker_turns.dart';
 import 'speakers.dart';
 
 /// Офлайн-расшифровка русской речи: Silero VAD + GigaAM v3 (sherpa-onnx).
@@ -93,6 +94,10 @@ Float32List? speakerEmbedding(so.SpeakerEmbeddingExtractor extractor, Float32Lis
   }
 }
 
+/// Отпечатки окон для поиска смены голоса; null — без модели голосов.
+TurnWindows? turnWindowsFor(so.SpeakerEmbeddingExtractor? extractor) =>
+    extractor == null ? null : TurnWindows((x) => speakerEmbedding(extractor, x));
+
 /// Подпись реплики канала собеседников: по голосу, если доступны отпечатки.
 String labelForOthers(so.SpeakerEmbeddingExtractor? extractor, SpeakerClusters clusters, Float32List samples) {
   if (extractor == null) return othersLabel;
@@ -133,13 +138,56 @@ so.OfflineRecognizer createRecognizer(String modelsDir) {
 }
 
 /// Распознаёт одну фразу.
-String recognize(so.OfflineRecognizer recognizer, Float32List samples) {
+String recognize(so.OfflineRecognizer recognizer, Float32List samples) => _decode(recognizer, samples).text.trim();
+
+so.OfflineRecognizerResult _decode(so.OfflineRecognizer recognizer, Float32List samples) {
   final stream = recognizer.createStream();
-  stream.acceptWaveform(samples: samples, sampleRate: _sampleRate);
-  recognizer.decode(stream);
-  final text = recognizer.getResult(stream).text.trim();
-  stream.free();
-  return text;
+  try {
+    stream.acceptWaveform(samples: samples, sampleRate: _sampleRate);
+    recognizer.decode(stream);
+    return recognizer.getResult(stream);
+  } finally {
+    stream.free();
+  }
+}
+
+/// Фраза канала собеседников → реплики: если внутри неё сменился голос (см.
+/// speakerChangePoints), то по реплике на каждого, иначе одна. [phrase] — звук с запасом
+/// перед речью, с отсчёта [phraseFrom] записи; [speechStart] — начало речи по VAD (с).
+/// [windows] — отпечатки окон (null — без модели голосов: одна реплика).
+List<Utterance> othersUtterances(
+  so.OfflineRecognizer recognizer,
+  so.SpeakerEmbeddingExtractor? extractor,
+  SpeakerClusters clusters,
+  TurnWindows? windows,
+  Float32List phrase, {
+  required int phraseFrom,
+  required double speechStart,
+}) {
+  final phraseStart = phraseFrom / _sampleRate;
+  final end = phraseStart + phrase.length / _sampleRate;
+  final cuts = windows == null ? const <int>[] : speakerChangePoints(phrase, phraseFrom, windows);
+  windows?.forgetBefore(phraseFrom + phrase.length);
+  if (cuts.isEmpty) {
+    final text = recognize(recognizer, phrase);
+    if (text.isEmpty) return const [];
+    return [Utterance(speechStart, end, labelForOthers(extractor, clusters, phrase), text)];
+  }
+  final result = _decode(recognizer, phrase);
+  final utterances = <Utterance>[];
+  for (final (i, p) in splitByTurns(result.tokens, result.timestamps, cuts, phrase.length).indexed) {
+    final speaker = labelForOthers(extractor, clusters, Float32List.sublistView(phrase, p.from, p.to));
+    final start = i == 0 && p.from == 0 ? speechStart : phraseStart + p.from / _sampleRate;
+    final end = phraseStart + p.to / _sampleRate;
+    // Лишний разрез (голос тот же) — куски снова одна реплика.
+    if (utterances.isNotEmpty && utterances.last.speaker == speaker) {
+      final last = utterances.removeLast();
+      utterances.add(Utterance(last.start, end, speaker, '${last.text} ${p.text}'));
+    } else {
+      utterances.add(Utterance(start, end, speaker, capitalized(p.text)));
+    }
+  }
+  return utterances;
 }
 
 Transcript _transcribe(String recordingDir, String modelsDir) {
@@ -147,6 +195,7 @@ Transcript _transcribe(String recordingDir, String modelsDir) {
   final recognizer = createRecognizer(modelsDir);
   final extractor = createSpeakerExtractor(modelsDir);
   final clusters = SpeakerClusters(sameSpeakerThreshold: speakerThreshold);
+  final windows = turnWindowsFor(extractor);
 
   final utterances = <Utterance>[];
   var audioSeconds = 0.0;
@@ -158,11 +207,15 @@ Transcript _transcribe(String recordingDir, String modelsDir) {
       audioSeconds = audioSeconds > samples.length / _sampleRate ? audioSeconds : samples.length / _sampleRate;
       for (final segment in _splitSpeech(samples, modelsDir)) {
         final phrase = withPreroll(samples, segment.start, segment.samples.length);
+        final start = segment.start / _sampleRate;
+        if (entry.value == othersLabel) {
+          utterances.addAll(othersUtterances(recognizer, extractor, clusters, windows, phrase,
+              phraseFrom: (segment.start - vadPreroll).clamp(0, samples.length), speechStart: start));
+          continue;
+        }
         final text = recognize(recognizer, phrase);
         if (text.isEmpty) continue;
-        final start = segment.start / _sampleRate;
-        final speaker = entry.value == othersLabel ? labelForOthers(extractor, clusters, phrase) : entry.value;
-        utterances.add(Utterance(start, start + segment.samples.length / _sampleRate, speaker, text));
+        utterances.add(Utterance(start, start + segment.samples.length / _sampleRate, entry.value, text));
       }
     }
   } finally {

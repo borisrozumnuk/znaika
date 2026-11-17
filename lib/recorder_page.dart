@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart';
 import 'package:macos_ui/macos_ui.dart';
@@ -152,6 +154,13 @@ class _RecorderPageState extends State<RecorderPage> {
         exit(_error == null ? 0 : 1);
       });
     }
+    // ZNAIKA_LIVE=<wav 16 кГц> [ZNAIKA_LIVE_SECONDS=300] — подать запись в расшифровку
+    // на лету в реальном темпе (как собеседников) и вывести, через сколько после конца
+    // фразы появлялась каждая реплика.
+    final liveFile = Platform.environment['ZNAIKA_LIVE'];
+    if (liveFile != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _liveSelftest(liveFile));
+    }
     // ZNAIKA_IMPORT=<wav 16 кГц> [ZNAIKA_IMPORT_AT=<ISO-время начала>] — готовая запись
     // (например, звук из видео созвона) становится встречей: всё, что после обычной записи.
     // Звук один, поэтому все голоса идут как собеседники, без «Я».
@@ -202,6 +211,48 @@ class _RecorderPageState extends State<RecorderPage> {
         exit(_error == null ? 0 : 1);
       });
     }
+  }
+
+  Future<void> _liveSelftest(String wavPath) async {
+    final seconds = int.tryParse(Platform.environment['ZNAIKA_LIVE_SECONDS'] ?? '') ?? 300;
+    final all = readWav(await File(wavPath).readAsBytes());
+    final samples = all.length > seconds * sampleRate ? all.sublist(0, seconds * sampleRate) : all;
+    final live = await LiveTranscriber.start(modelsDir);
+    await live.ready;
+    final watch = Stopwatch()..start();
+    final delays = <double>[];
+    // Куски одной фразы (разрезанной по смене голоса) приходят пачкой, когда фраза кончилась:
+    // задержка — от конца последнего куска пачки.
+    final batch = <Utterance>[];
+    live.utterances.listen((u) {
+      if (batch.isEmpty) {
+        final arrived = watch.elapsedMilliseconds / 1000;
+        Timer(const Duration(milliseconds: 50), () {
+          final delay = arrived - batch.map((u) => u.end).reduce(math.max);
+          delays.add(delay);
+          for (final u in batch) {
+            stdout.writeln('SELFTEST +${delay.toStringAsFixed(2)} с ${u.line}');
+          }
+          batch.clear();
+        });
+      }
+      batch.add(u);
+    });
+    // Порции по 0,1 с в темпе записи.
+    const chunk = sampleRate ~/ 10;
+    for (var at = 0; at < samples.length; at += chunk) {
+      final ahead = at / sampleRate - watch.elapsedMilliseconds / 1000;
+      if (ahead > 0) await Future<void>.delayed(Duration(milliseconds: (ahead * 1000).round()));
+      live.feed('system', Float32List.sublistView(samples, at, math.min(at + chunk, samples.length)));
+    }
+    await Future<void>.delayed(const Duration(seconds: 1));
+    final utterances = await live.finish();
+    delays.sort();
+    String at(double q) => delays.isEmpty ? '-' : delays[((delays.length - 1) * q).round()].toStringAsFixed(2);
+    stdout.writeln('SELFTEST live ${samples.length ~/ sampleRate} с, реплик ${utterances.length}, '
+        'голосов ${speakersOf([for (final u in utterances) u.line]).length}; задержка медиана ${at(0.5)} с, '
+        '90% ${at(0.9)} с, макс ${at(1)} с');
+    exit(0);
   }
 
   Future<void> _import(String wavPath) async {
