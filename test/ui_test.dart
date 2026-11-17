@@ -528,7 +528,9 @@ void main() {
       mode: ThemeMode.dark,
       size: const Size(760, 520),
     );
-    expect(find.textContaining('Собеседник 2', findRichText: true), findsOneWidget);
+    // Голоса — эмодзи вместо «Собеседник N».
+    expect(find.textContaining('🐻  Согласна.', findRichText: true), findsOneWidget);
+    expect(find.textContaining('Собеседник', findRichText: true), findsNothing);
     expect(find.textContaining('Тогда я подготовлю…', findRichText: true), findsOneWidget);
     // Время встречи длиннее часа — в одну строку, как и «00:05».
     expect(tester.getSize(find.text('1:05:23')).height, tester.getSize(find.text('00:05')).height);

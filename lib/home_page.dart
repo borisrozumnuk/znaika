@@ -16,6 +16,7 @@ import 'model_manager.dart';
 import 'model_manifest.dart';
 import 'platform_files.dart';
 import 'recorder_page.dart';
+import 'speaker_emoji.dart';
 import 'summarizer.dart';
 import 'summary_models.dart';
 import 'transcriber.dart';
@@ -329,11 +330,12 @@ class _HomePageState extends State<HomePage> {
     await _reload();
   }
 
-  Future<String> _markdown(Meeting meeting) async => meetingMarkdown(
+  /// Встреча в Markdown для экспорта — с эмодзи собеседников, как на экране.
+  Future<String> _markdown(Meeting meeting) async => withSpeakerEmoji(meetingMarkdown(
     meeting,
     summary: await meeting.readSummary(),
     transcript: await meeting.readTranscript(),
-  );
+  ));
 
   Future<void> _export(Meeting meeting) async {
     try {
@@ -362,7 +364,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _copyNotes(Meeting meeting) async {
     final summary = await meeting.readSummary();
     final text = (summary != null && summary.isNotEmpty)
-        ? '# ${meeting.title}\n\n$summary'
+        ? '# ${meeting.title}\n\n${withSpeakerEmoji(summary)}'
         : await _markdown(meeting);
     await Clipboard.setData(ClipboardData(text: text));
   }

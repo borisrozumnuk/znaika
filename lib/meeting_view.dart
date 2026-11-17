@@ -5,6 +5,7 @@ import 'package:macos_ui/macos_ui.dart';
 
 import 'audio_player.dart';
 import 'meetings.dart';
+import 'speaker_emoji.dart';
 import 'speaker_hints.dart';
 import 'ui.dart';
 
@@ -376,7 +377,7 @@ class _MeetingViewState extends State<MeetingView> {
   }
 }
 
-/// «Участники: Я, [Собеседник 1] [Анна]» — щелчок по собеседнику даёт ему имя.
+/// «Участники: Я, [🦊] [Анна]» — щелчок по собеседнику даёт ему имя.
 class _Participants extends StatelessWidget {
   const _Participants({
     required this.speakers,
@@ -412,7 +413,7 @@ class _Participants extends StatelessWidget {
               controlSize: ControlSize.regular,
               secondary: true,
               onPressed: () => onPressed(speaker),
-              child: Text(speaker),
+              child: Text(displaySpeaker(speaker)),
             ),
           ),
           if (hints[speaker] case final hint?)
@@ -444,7 +445,7 @@ class _HintButtonState extends State<_HintButton> {
     final color = MacosTheme.of(context).primaryColor;
     return MacosTooltip(
       message: 'Похоже, это ${hint.name}: после обращения по имени отвечал этот голос '
-          '(${hint.votes} $times). Например:\n${hint.evidence}\n\nЩёлкните, чтобы назвать.',
+          '(${hint.votes} $times). Например:\n${withSpeakerEmoji(hint.evidence)}\n\nЩёлкните, чтобы назвать.',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hovered = true),
@@ -514,7 +515,7 @@ class _SpeakerNameDialogState extends State<_SpeakerNameDialog> {
       },
       child: MacosAlertDialog(
         appIcon: const MacosIcon(CupertinoIcons.person_crop_circle, size: 48),
-        title: Text('Как зовут «${widget.speaker}»?', textAlign: TextAlign.center),
+        title: Text('Как зовут «${displaySpeaker(widget.speaker)}»?', textAlign: TextAlign.center),
         message: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -642,6 +643,8 @@ class TranscriptLines extends StatelessWidget {
                     ),
                     Expanded(
                       child: Text.rich(
+                        // Высота строки — по тексту: эмодзи собеседника выше букв и раздвигал бы строки.
+                        strutStyle: StrutStyle.fromTextStyle(typography.body, forceStrutHeight: true),
                         TextSpan(
                           style: index < lines.length
                               ? typography.body
@@ -651,7 +654,7 @@ class TranscriptLines extends StatelessWidget {
                                 ),
                           children: [
                             TextSpan(
-                              text: '${m[2]}  ',
+                              text: '${displaySpeaker(m[2]!)}  ',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                               ),
@@ -685,7 +688,7 @@ class SummaryMarkdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final typography = MacosTheme.of(context).typography;
     final blocks = <Widget>[];
-    for (final raw in markdown.split('\n')) {
+    for (final raw in withSpeakerEmoji(markdown).split('\n')) {
       final line = raw.trimRight();
       if (line.trim().isEmpty) continue;
       final indent = (line.length - line.trimLeft().length) ~/ 2;

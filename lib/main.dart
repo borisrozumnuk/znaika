@@ -15,6 +15,7 @@ import 'meetings.dart';
 import 'model_manager.dart';
 import 'model_manifest.dart';
 import 'setup_page.dart';
+import 'ui.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -133,8 +134,8 @@ class ZnaikaApp extends StatelessWidget {
     return MacosApp(
       title: 'Znaika',
       // Светлая или тёмная — как в системе; акцентный цвет macos_ui берёт системный.
-      theme: MacosThemeData.light(),
-      darkTheme: MacosThemeData.dark(),
+      theme: withEmojiFallback(MacosThemeData.light()),
+      darkTheme: withEmojiFallback(MacosThemeData.dark()),
       themeMode: ThemeMode.system,
       // Русские подписи стандартных элементов (контекстное меню «Скопировать» и т. п.).
       locale: const Locale('ru'),

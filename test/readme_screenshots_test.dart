@@ -30,6 +30,7 @@ import 'package:znaika/model_manifest.dart';
 import 'package:znaika/recorder_page.dart';
 import 'package:znaika/setup_page.dart';
 import 'package:znaika/transcriber.dart';
+import 'package:znaika/ui.dart';
 
 final _enabled = Platform.environment['ZNAIKA_SCREENSHOTS'] == '1';
 const _window = Size(1180, 760);
@@ -175,6 +176,9 @@ Future<void> _loadFonts() async {
   for (final family in ['.AppleSystemUIFont', 'Roboto']) {
     await (FontLoader(family)..addFont(sf.then(ByteData.sublistView))).load();
   }
+  // Эмодзи собеседников (🦊, 🐻…): без системного шрифта эмодзи в тестах — прямоугольники.
+  final emoji = File('/System/Library/Fonts/Apple Color Emoji.ttc').readAsBytes();
+  await (FontLoader('Apple Color Emoji')..addFont(emoji.then(ByteData.sublistView))).load();
   final config = jsonDecode(await File('.dart_tool/package_config.json').readAsString()) as Map;
   final cupertino = (config['packages'] as List).cast<Map>().firstWhere((p) => p['name'] == 'cupertino_icons');
   final icons = File('${Uri.parse(cupertino['rootUri'] as String).toFilePath()}/assets/CupertinoIcons.ttf');
@@ -199,8 +203,8 @@ Future<void> _pump(WidgetTester tester, Widget home, ThemeMode mode, {Size size 
   addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
   await tester.pumpWidget(MacosApp(
     debugShowCheckedModeBanner: false,
-    theme: MacosThemeData.light(),
-    darkTheme: MacosThemeData.dark(),
+    theme: withEmojiFallback(MacosThemeData.light()),
+    darkTheme: withEmojiFallback(MacosThemeData.dark()),
     themeMode: mode,
     home: _Frame(size: size, child: home),
   ));

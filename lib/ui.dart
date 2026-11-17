@@ -398,3 +398,27 @@ class PageContent extends StatelessWidget {
     );
   }
 }
+
+/// Тема со шрифтом эмодзи про запас: эмодзи собеседников (🦊, 🐻…) — из Apple Color Emoji,
+/// если в основном шрифте их нет. macOS подставляет его и сама, но явный запасной шрифт
+/// нужен и снимкам для README (там шрифты загружаются вручную, без системной подстановки).
+/// DefaultTextStyle не годится: стили macos_ui его не наследуют.
+MacosThemeData withEmojiFallback(MacosThemeData theme) {
+  final t = theme.typography;
+  TextStyle e(TextStyle style) => style.copyWith(fontFamilyFallback: const ['Apple Color Emoji']);
+  return theme.copyWith(
+    typography: MacosTypography.raw(
+      largeTitle: e(t.largeTitle),
+      title1: e(t.title1),
+      title2: e(t.title2),
+      title3: e(t.title3),
+      headline: e(t.headline),
+      subheadline: e(t.subheadline),
+      body: e(t.body),
+      callout: e(t.callout),
+      footnote: e(t.footnote),
+      caption1: e(t.caption1),
+      caption2: e(t.caption2),
+    ),
+  );
+}
