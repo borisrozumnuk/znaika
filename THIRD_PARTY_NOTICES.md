@@ -17,7 +17,6 @@
 | GigaAM v3 с пунктуацией (Сбер) | MIT |
 | 3D-Speaker ERes2Net (VoxCeleb) | Apache 2.0 |
 | Gemma 4 E4B / E2B (Google) | Apache 2.0 |
-| Qwen3 4B Instruct 2507 (Alibaba) | Apache 2.0 |
 
 ## Зависимости Flutter и Dart
 

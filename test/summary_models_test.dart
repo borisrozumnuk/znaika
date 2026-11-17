@@ -38,9 +38,15 @@ void main() {
     expect(fresh.chosen, gemmaE2b);
     expect(fresh.recommended, gemmaE2b);
 
-    final saved = File('${root.path}/saved.json')..writeAsStringSync('{"summaryModel": "${qwen3_4b.id}"}');
+    final saved = File('${root.path}/saved.json')..writeAsStringSync('{"summaryModel": "${gemmaE2b.id}"}');
     final user = SummaryModelChoice(saved)..recommend(gemmaE4b);
-    expect(user.chosen, qwen3_4b);
+    expect(user.chosen, gemmaE2b);
+  });
+
+  test('выбранная модель убрана из списка (Qwen3 4B в 1.0.0–1.0.3) — снова рекомендованная', () {
+    final saved = File('${root.path}/dropped.json')..writeAsStringSync('{"summaryModel": "llm-qwen3-4b"}');
+    final user = SummaryModelChoice(saved)..recommend(gemmaE2b);
+    expect(user.chosen, gemmaE2b);
   });
 
   test('испорченный settings.json — основная модель', () {

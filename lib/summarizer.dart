@@ -361,6 +361,11 @@ class Summarizer {
       Duration? firstPiece;
       final inputTokens = engine.countTokens('$system\n$prompt');
       logLine('Gemma ${engine.backend}: запрос $inputTokens токенов (попытка $attempt)');
+      // Вместо «Prefill input length exceeds available state entries» из LiteRT-LM. Только вход:
+      // ответ, не поместившийся в остаток контекста, LiteRT-LM просто обрывает.
+      if (inputTokens >= _contextTokens) {
+        throw StateError('Запрос не помещается в модель: $inputTokens токенов при контексте $_contextTokens');
+      }
       final done = Completer<String>();
       final subscription = engine
           .generate(prompt: prompt, system: system, maxOutputTokens: maxOutputTokens, temperature: temperature)

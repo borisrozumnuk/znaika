@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_globals.dart';
 import 'database.dart';
 import 'home_page.dart';
+import 'log.dart';
 import 'meetings.dart';
 import 'model_manager.dart';
 import 'model_manifest.dart';
@@ -124,6 +126,16 @@ Future<void> _removeLegacyCache() async {
     await legacy.delete(recursive: true);
     stdout.writeln('Удалён старый кэш: ${legacy.path}');
   }
+  // Убранные модели заметок (и их недокачанные .part): место на диске им больше не нужно.
+  // Если такая модель была выбрана, выбор сам вернётся к рекомендованной (SummaryModelChoice).
+  for (final name in droppedModelFiles) {
+    for (final file in [File('$modelsDir/$name'), File('$modelsDir/$name.part')]) {
+      if (await file.exists()) {
+        await file.delete();
+        logLine('Удалена убранная модель: ${file.path}');
+      }
+    }
+  }
 }
 
 class ZnaikaApp extends StatelessWidget {
@@ -159,9 +171,30 @@ class _RootState extends State<_Root> {
   bool _proceeded = selftestMode;
   bool _checked = false;
 
+  /// Перед выходом — закрыть базу самим. Иначе её закрывает фоновый изолят drift уже во
+  /// время остановки Dart VM, и sqlite3Close падает (EXC_BAD_ACCESS при выходе, 1.0.1–1.0.3).
+  late final _lifecycle = AppLifecycleListener(onExitRequested: _closeBeforeExit);
+
+  Future<AppExitResponse> _closeBeforeExit() async {
+    try {
+      await meetingStore.db.close().timeout(const Duration(seconds: 3));
+      logLine('Выход: база закрыта');
+    } catch (e) {
+      logLine('База не закрыта перед выходом: $e');
+    }
+    return AppExitResponse.exit;
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    _lifecycle;
     if (!selftestMode) {
       modelManager.check().then((_) {
         if (!mounted) return;

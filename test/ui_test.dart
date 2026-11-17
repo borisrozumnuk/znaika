@@ -43,10 +43,10 @@ void main() {
     appCacheDir = Directory('${root.path}/cache');
     meetingStore = MeetingStore(Directory('${root.path}/recordings'), AppDatabase(NativeDatabase.memory()));
     modelManager = ModelManager(Directory('${root.path}/models'));
-    // Модели не скачаны: в листе выбора модели — «Скачать»; Qwen начат (.part) — «Докачать»
+    // Модели не скачаны: в листе выбора модели — «Скачать»; E2B начата (.part) — «Докачать»
     // и красная корзина в правом нижнем углу карточки.
     await Directory('${root.path}/models').create(recursive: true);
-    await File('${root.path}/models/qwen3_4b_instruct_2507_mixed_int4.litertlm.part').writeAsBytes(List.filled(1 << 20, 0));
+    await File('${root.path}/models/gemma-4-E2B-it.litertlm.part').writeAsBytes(List.filled(1 << 20, 0));
     await modelManager.check();
 
     // Встреча с длинным заголовком, выжимкой и расшифровкой.
@@ -394,10 +394,9 @@ void main() {
     await tester.tap(find.text('Gemma 4 E4B'));
     await tester.pumpAndSettle();
     expect(find.text('Модель для заметок'), findsOneWidget);
-    for (final name in ['Gemma 4 E2B', 'Qwen3 4B']) {
-      expect(find.textContaining(name, findRichText: true, skipOffstage: false), findsWidgets);
-    }
-    expect(find.widgetWithText(PushButton, 'Скачать', skipOffstage: false), findsNWidgets(2));
+    expect(find.textContaining('Gemma 4 E2B', findRichText: true, skipOffstage: false), findsWidgets);
+    expect(find.textContaining('Qwen', findRichText: true, skipOffstage: false), findsNothing);
+    expect(find.widgetWithText(PushButton, 'Скачать', skipOffstage: false), findsOneWidget);
     expect(find.widgetWithText(PushButton, 'Докачать', skipOffstage: false), findsOneWidget);
     // «Удалить» — не кнопка с текстом, а красная корзина.
     expect(find.text('Удалить'), findsNothing);
@@ -453,7 +452,7 @@ void main() {
     expect(summaryModelChoice.chosen, gemmaE2b);
     // Панель закрылась: описание каждой модели — не больше одного раза.
     expect(find.text(gemmaE2b.note), findsOneWidget);
-    expect(find.text(qwen3_4b.note), findsNothing);
+    expect(find.text(gemmaE4b.note), findsNothing);
     summaryModelChoice.select(gemmaE4b);
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpWidget(const SizedBox());

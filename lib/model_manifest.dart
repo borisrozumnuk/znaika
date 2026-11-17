@@ -139,7 +139,9 @@ const gemmaE4b = SummaryModel(
 // в 16 ГБ, контекст ≥ 8192, без режима «размышлений»); на русских встречах не проверялись —
 // это знание для разработки, в интерфейс оно не выносится.
 // Не взяты: Gemma 4 12B (не помещается в 16 ГБ), Qwen3-8B и Qwen3.5 (по умолчанию
-// «размышляют» перед ответом), Ministral-3-3B (контекст 4096).
+// «размышляют» перед ответом), Ministral-3-3B (контекст 4096). Qwen3 4B Instruct 2507
+// была в 1.0.0–1.0.3 и убрана: у её .litertlm контекст 2048 — часть расшифровки в 3000
+// токенов не помещается («Prefill input length exceeds available state entries»).
 const gemmaE2b = SummaryModel(
   name: 'Gemma 4 E2B',
   note: 'Легче и быстрее, заметки короче. Подойдёт и для Mac с 8 ГБ памяти.',
@@ -159,26 +161,10 @@ const gemmaE2b = SummaryModel(
   ),
 );
 
-const qwen3_4b = SummaryModel(
-  name: 'Qwen3 4B',
-  note: 'Модель от Alibaba, сжатая до 4 бит: компактнее E4B, свой стиль заметок.',
-  package: ModelPackage(
-    id: 'llm-qwen3-4b',
-    title: 'Qwen3 4B',
-    description: 'Qwen3-4B-Instruct-2507 (Alibaba) · Apache 2.0',
-    files: [
-      ModelFile(
-        path: 'qwen3_4b_instruct_2507_mixed_int4.litertlm',
-        url: 'https://huggingface.co/litert-community/Qwen3-4B-Instruct-2507/resolve/'
-            '4d409771b414d86b270ca54d27ffc45032a81142/qwen3_4b_instruct_2507_mixed_int4.litertlm',
-        size: 2659057664,
-        sha256: '9e48b165836256f5344d9d044930607b9c47f6ef34e27f82e96881664f3ba2fd',
-      ),
-    ],
-  ),
-);
+const summaryModels = [gemmaE4b, gemmaE2b];
 
-const summaryModels = [gemmaE4b, gemmaE2b, qwen3_4b];
+/// Файлы убранных моделей заметок — удаляются при запуске (2,7 ГБ Qwen3 4B).
+const droppedModelFiles = ['qwen3_4b_instruct_2507_mixed_int4.litertlm'];
 
 /// Рекомендованная модель для этого Mac по объёму памяти: E4B во float32 занимает
 /// около 4 ГБ, на 8 ГБ вместе с системой, расшифровкой и браузером ей тесно.
