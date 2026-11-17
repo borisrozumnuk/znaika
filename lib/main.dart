@@ -171,18 +171,23 @@ class _RootState extends State<_Root> {
   bool _proceeded = selftestMode;
   bool _checked = false;
 
-  /// Перед выходом — закрыть базу самим. Иначе её закрывает фоновый изолят drift уже во
-  /// время остановки Dart VM, и sqlite3Close падает (EXC_BAD_ACCESS при выходе, 1.0.1–1.0.3).
-  late final _lifecycle = AppLifecycleListener(onExitRequested: _closeBeforeExit);
+  /// Выход без закрытия SQLite. sqlite3Close при выходе падает (EXC_BAD_ACCESS, вызов по
+  /// нулевому адресу): sqlite3.framework оказывается загружен в процесс дважды, и закрытие
+  /// уходит во вторую, неинициализированную копию. Так падало и закрытие фоновым изолятом
+  /// drift при остановке Dart VM (1.0.1–1.0.3), и явное `db.close()` (1.0.4–1.0.6).
+  /// Поэтому дожидаемся, пока база выполнит всё из очереди, и завершаем процесс сразу:
+  /// записанное уже на диске, а незакрытый файл SQLite штатно открывает при следующем запуске.
+  late final _lifecycle = AppLifecycleListener(onExitRequested: _exitWithoutClosingDb);
 
-  Future<AppExitResponse> _closeBeforeExit() async {
+  Future<AppExitResponse> _exitWithoutClosingDb() async {
     try {
-      await meetingStore.db.close().timeout(const Duration(seconds: 3));
-      logLine('Выход: база закрыта');
+      // Запрос встаёт в очередь базы за всеми начатыми — когда он выполнен, выполнены и они.
+      await meetingStore.db.customSelect('SELECT 1').get().timeout(const Duration(seconds: 3));
+      logLine('Выход: база дописана');
     } catch (e) {
-      logLine('База не закрыта перед выходом: $e');
+      logLine('Выход: база не ответила за 3 с: $e');
     }
-    return AppExitResponse.exit;
+    exit(0);
   }
 
   @override
